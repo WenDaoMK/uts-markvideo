@@ -53,3 +53,40 @@ For production, replace the CPU bitmap conversion in
 `MarkVideoCameraActivity.kt` with an OpenGL or CameraX effect pipeline, replace
 the iOS CoreGraphics watermark pass with Metal/CoreImage tuning as needed, and
 add deeper device/orientation testing.
+
+## GitHub Actions packaging
+
+`.github/workflows/cloud-package.yml` adds a manual GitHub Actions workflow that
+uses the official HBuilderX Linux CLI cloud packaging command:
+
+1. Download HBuilderX Linux CLI.
+2. Run `cli open`.
+3. Log in with DCloud.
+4. Import this project.
+5. Generate a temporary `cli pack --config` JSON file.
+6. Upload generated APK/AAB/IPA/WGT artifacts from `unpackage/`.
+
+Before running it, configure repository variables:
+
+- `ANDROID_PACKAGE_NAME`, for example `com.example.utsmarkvideo`
+- `IOS_BUNDLE_ID`, for example `com.example.utsmarkvideo`
+- `ANDROID_CERT_ALIAS`, only when using your own Android keystore
+- `IOS_SUPPORTED_DEVICE`, optional, defaults to `iPhone`
+- `IOS_CHANNELS`, optional, defaults to `phone`
+- `HBUILDERX_URL`, optional, defaults to the current official Linux CLI release
+
+Configure repository secrets:
+
+- `DCLOUD_USERNAME`
+- `DCLOUD_PASSWORD`
+- `ANDROID_CERT_BASE64`, only when `android_pack_type` is `0`
+- `ANDROID_CERT_PASSWORD`, only when `android_pack_type` is `0`
+- `ANDROID_STORE_PASSWORD`, only when `android_pack_type` is `0`
+- `IOS_PROFILE_BASE64`, required for iOS packaging
+- `IOS_CERT_BASE64`, required for iOS packaging
+- `IOS_CERT_PASSWORD`, required for iOS packaging
+
+Encode certificate files with `base64 -w 0 <file>` before saving them as
+GitHub secrets. The workflow defaults to safe packaging and Android DCloud cloud
+certificate mode (`android_pack_type=3`), so you can start with Android once
+DCloud cloud certificate configuration exists for this app.

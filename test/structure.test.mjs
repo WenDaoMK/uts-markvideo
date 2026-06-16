@@ -104,3 +104,20 @@ test('native app declares camera and microphone privacy strings', async () => {
   assert.match(iosPlist, /NSCameraUsageDescription/);
   assert.match(iosPlist, /NSMicrophoneUsageDescription/);
 });
+
+test('GitHub Actions workflow can request Android or iOS cloud packages', async () => {
+  const workflow = await readFile(
+    path.join(root, '.github/workflows/cloud-package.yml'),
+    'utf8',
+  );
+
+  assert.match(workflow, /workflow_dispatch/);
+  assert.match(workflow, /DCLOUD_USERNAME/);
+  assert.match(workflow, /DCLOUD_PASSWORD/);
+  assert.match(workflow, /HBuilderX/);
+  assert.match(workflow, /cli.*pack/s);
+  assert.match(workflow, /platform/);
+  assert.match(workflow, /android/);
+  assert.match(workflow, /ios/);
+  assert.match(workflow, /actions\/upload-artifact/);
+});
