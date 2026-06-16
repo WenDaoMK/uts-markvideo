@@ -2,7 +2,7 @@
   <view class="page">
     <view class="panel">
       <text class="title">UTS MarkVideo MVP</text>
-      <text class="hint">Android native MP4 watermark encoder</text>
+      <text class="hint">Android native camera recorder</text>
 
       <input
         class="input"
@@ -11,8 +11,8 @@
         placeholder="Watermark text"
       />
 
-      <button class="button" :disabled="busy" @click="createSample">
-        {{ busy ? 'Generating...' : 'Generate native sample' }}
+      <button class="button" :disabled="busy" @click="openRecorder">
+        {{ busy ? 'Waiting for recorder...' : 'Open camera recorder' }}
       </button>
 
       <text class="status">{{ status }}</text>
@@ -34,7 +34,7 @@
 </template>
 
 <script>
-import { createWatermarkSample } from '@/uni_modules/uts-markvideo'
+import { recordWatermarkVideo } from '@/uni_modules/uts-markvideo'
 
 export default {
   data() {
@@ -46,22 +46,19 @@ export default {
     }
   },
   methods: {
-    createSample() {
+    openRecorder() {
       if (this.busy) return
 
       this.busy = true
       this.videoPath = ''
-      this.status = 'Generating native MP4...'
+      this.status = 'Open native camera, then start and stop recording.'
 
-      createWatermarkSample({
+      recordWatermarkVideo({
         text: this.watermarkText,
-        durationMs: 3000,
-        width: 720,
-        height: 1280,
-        fps: 24,
+        fps: 15,
         success: (res) => {
           this.videoPath = res.tempFilePath
-          this.status = `Created ${res.width}x${res.height}, ${res.durationMs}ms`
+          this.status = `Created ${res.width}x${res.height}, ${res.durationMs}ms. Play it to verify the burned-in watermark.`
         },
         fail: (err) => {
           this.status = `${err.errCode}: ${err.errMsg}`

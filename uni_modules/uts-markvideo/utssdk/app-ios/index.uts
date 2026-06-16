@@ -1,8 +1,19 @@
 import {
   CreateWatermarkSample,
   CreateWatermarkSampleOptions,
+  RecordWatermarkVideo,
+  RecordWatermarkVideoOptions,
   MarkVideoFail
 } from '../interface.uts'
+
+export const recordWatermarkVideo : RecordWatermarkVideo = function (options : RecordWatermarkVideoOptions) {
+  const err: MarkVideoFail = {
+    errCode: 2101,
+    errMsg: 'iOS camera recorder MVP is not implemented yet.'
+  }
+  options.fail?.(err)
+  options.complete?.(err)
+}
 
 export const createWatermarkSample : CreateWatermarkSample = function (options : CreateWatermarkSampleOptions) {
   const err: MarkVideoFail = {

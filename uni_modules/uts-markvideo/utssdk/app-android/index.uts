@@ -2,9 +2,41 @@ import {
   CreateWatermarkSample,
   CreateWatermarkSampleOptions,
   CreateWatermarkSampleSuccess,
+  RecordWatermarkVideo,
+  RecordWatermarkVideoOptions,
+  RecordWatermarkVideoSuccess,
   MarkVideoFail
 } from '../interface.uts'
 import { MarkVideoNative } from 'uts.markvideo.android'
+
+export const recordWatermarkVideo : RecordWatermarkVideo = function (options : RecordWatermarkVideoOptions) {
+  const text = options.text ?? 'UTS 即拍即有水印'
+  const fps = options.fps ?? 15
+
+  MarkVideoNative.openCameraRecorder(
+    text,
+    fps,
+    (tempFilePath: string, actualDurationMs: number, actualWidth: number, actualHeight: number, watermarkText: string) => {
+      const res: RecordWatermarkVideoSuccess = {
+        tempFilePath: tempFilePath,
+        durationMs: actualDurationMs,
+        width: actualWidth,
+        height: actualHeight,
+        watermarkText: watermarkText
+      }
+      options.success?.(res)
+      options.complete?.(res)
+    },
+    (message: string) => {
+      const err: MarkVideoFail = {
+        errCode: 1101,
+        errMsg: message
+      }
+      options.fail?.(err)
+      options.complete?.(err)
+    }
+  )
+}
 
 export const createWatermarkSample : CreateWatermarkSample = function (options : CreateWatermarkSampleOptions) {
   const text = options.text ?? 'UTS MarkVideo MVP'

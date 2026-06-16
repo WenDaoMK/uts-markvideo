@@ -15,6 +15,7 @@ const requiredFiles = [
   'uni_modules/uts-markvideo/package.json',
   'uni_modules/uts-markvideo/utssdk/interface.uts',
   'uni_modules/uts-markvideo/utssdk/app-android/index.uts',
+  'uni_modules/uts-markvideo/utssdk/app-android/MarkVideoCameraActivity.kt',
   'uni_modules/uts-markvideo/utssdk/app-android/MarkVideoNative.kt',
   'uni_modules/uts-markvideo/utssdk/app-android/AndroidManifest.xml',
   'uni_modules/uts-markvideo/utssdk/app-ios/index.uts',
@@ -34,4 +35,29 @@ test('plugin package is named uts-markvideo', async () => {
   const pkg = JSON.parse(text);
   assert.equal(pkg.id, 'uts-markvideo');
   assert.equal(pkg.name, 'uts-markvideo');
+});
+
+test('camera MVP exposes a recordWatermarkVideo API', async () => {
+  const interfaceText = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/interface.uts'),
+    'utf8',
+  );
+  const androidBridge = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-android/index.uts'),
+    'utf8',
+  );
+  const page = await readFile(path.join(root, 'pages/index/index.vue'), 'utf8');
+
+  assert.match(interfaceText, /RecordWatermarkVideo/);
+  assert.match(androidBridge, /recordWatermarkVideo/);
+  assert.match(page, /recordWatermarkVideo/);
+});
+
+test('Android manifest registers the native camera activity', async () => {
+  const manifest = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-android/AndroidManifest.xml'),
+    'utf8',
+  );
+
+  assert.match(manifest, /MarkVideoCameraActivity/);
 });

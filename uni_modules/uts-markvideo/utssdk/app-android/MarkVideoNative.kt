@@ -1,5 +1,6 @@
 package uts.markvideo.android
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -19,6 +20,57 @@ import kotlin.math.min
 object MarkVideoNative {
     private const val MIME_TYPE = "video/avc"
     private const val TIMEOUT_US = 10_000L
+    internal const val EXTRA_WATERMARK_TEXT = "uts.markvideo.WATERMARK_TEXT"
+    internal const val EXTRA_FPS = "uts.markvideo.FPS"
+
+    private var pendingRecordSuccess: ((String, Long, Int, Int, String) -> Unit)? = null
+    private var pendingRecordFail: ((String) -> Unit)? = null
+
+    @JvmStatic
+    fun openCameraRecorder(
+        text: String,
+        fps: Number,
+        onSuccess: (String, Long, Int, Int, String) -> Unit,
+        onFail: (String) -> Unit
+    ) {
+        val activity = UTSAndroid.getUniActivity()
+        if (activity == null) {
+            onFail("No active uni-app activity.")
+            return
+        }
+
+        pendingRecordSuccess = onSuccess
+        pendingRecordFail = onFail
+
+        val intent = Intent(activity, MarkVideoCameraActivity::class.java).apply {
+            putExtra(EXTRA_WATERMARK_TEXT, text.ifBlank { "UTS 即拍即有水印" })
+            putExtra(EXTRA_FPS, fps.toInt().coerceIn(8, 24))
+        }
+        activity.startActivity(intent)
+    }
+
+    internal fun completeCameraRecorder(
+        path: String,
+        durationMs: Long,
+        width: Int,
+        height: Int,
+        watermarkText: String
+    ) {
+        val callback = pendingRecordSuccess
+        clearCameraCallbacks()
+        callback?.invoke(path, durationMs, width, height, watermarkText)
+    }
+
+    internal fun failCameraRecorder(message: String) {
+        val callback = pendingRecordFail
+        clearCameraCallbacks()
+        callback?.invoke(message)
+    }
+
+    private fun clearCameraCallbacks() {
+        pendingRecordSuccess = null
+        pendingRecordFail = null
+    }
 
     @JvmStatic
     fun createSampleVideo(

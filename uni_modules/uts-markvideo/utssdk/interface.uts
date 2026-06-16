@@ -10,6 +10,26 @@ export type MarkVideoFail = {
   errMsg: string
 }
 
+export type RecordWatermarkVideoSuccess = {
+  tempFilePath: string
+  durationMs: number
+  width: number
+  height: number
+  watermarkText: string
+}
+
+export type RecordWatermarkVideoOptions = {
+  text?: string
+  fps?: number
+  success?: (res: RecordWatermarkVideoSuccess) => void
+  fail?: (err: MarkVideoFail) => void
+  complete?: (res: any) => void
+}
+
+export type RecordWatermarkVideo = (
+  options: RecordWatermarkVideoOptions
+) => void
+
 export type CreateWatermarkSampleOptions = {
   text?: string
   durationMs?: number
