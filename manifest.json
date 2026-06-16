@@ -1,6 +1,6 @@
 {
   "name": "uts-markvideo",
-  "appid": "__UNI__UTSMARKVIDEO",
+  "appid": "__UNI__35B9069",
   "description": "Native UTS watermark video MVP",
   "versionName": "0.0.1",
   "versionCode": "1",
@@ -18,7 +18,8 @@
         "privacyDescription": {
           "NSCameraUsageDescription": "用于录制带水印的视频画面",
           "NSMicrophoneUsageDescription": "用于录制视频中的声音"
-        }
+        },
+        "dSYMs": false
       }
     }
   }
