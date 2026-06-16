@@ -56,15 +56,19 @@ if (platforms.includes('android')) {
 }
 
 if (platforms.includes('ios')) {
+  const isPrisonbreak = optionalBoolean('IOS_IS_PRISONBREAK');
   config.ios = {
     bundle: required('IOS_BUNDLE_ID'),
     supporteddevice: env.IOS_SUPPORTED_DEVICE || 'iPhone',
-    isprisonbreak: optionalBoolean('IOS_IS_PRISONBREAK'),
+    isprisonbreak: isPrisonbreak,
     channels: env.IOS_CHANNELS || 'phone',
-    profile: required('IOS_PROFILE_FILE'),
-    certfile: required('IOS_CERT_FILE'),
-    certpassword: required('IOS_CERT_PASSWORD'),
   };
+
+  if (!isPrisonbreak) {
+    config.ios.profile = required('IOS_PROFILE_FILE');
+    config.ios.certfile = required('IOS_CERT_FILE');
+    config.ios.certpassword = required('IOS_CERT_PASSWORD');
+  }
 }
 
 await writeFile(output, `${JSON.stringify(config, null, 2)}\n`, 'utf8');

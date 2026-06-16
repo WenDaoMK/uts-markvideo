@@ -82,11 +82,19 @@ Configure repository secrets:
 - `ANDROID_CERT_BASE64`, only when `android_pack_type` is `0`
 - `ANDROID_CERT_PASSWORD`, only when `android_pack_type` is `0`
 - `ANDROID_STORE_PASSWORD`, only when `android_pack_type` is `0`
-- `IOS_PROFILE_BASE64`, required for iOS packaging
-- `IOS_CERT_BASE64`, required for iOS packaging
-- `IOS_CERT_PASSWORD`, required for iOS packaging
+- `IOS_PROFILE_BASE64`, only when `ios_prisonbreak` is `false`
+- `IOS_CERT_BASE64`, only when `ios_prisonbreak` is `false`
+- `IOS_CERT_PASSWORD`, only when `ios_prisonbreak` is `false`
 
 Encode certificate files with `base64 -w 0 <file>` before saving them as
 GitHub secrets. The workflow defaults to safe packaging and Android DCloud cloud
 certificate mode (`android_pack_type=3`), so you can start with Android once
 DCloud cloud certificate configuration exists for this app.
+
+For iOS device smoke testing with AltStore-style self-signing tools, run the
+workflow with `platform=ios` and keep `ios_prisonbreak=true`. In that mode the
+generated pack config requests a DCloud iOS prisonbreak package and does not
+require `IOS_PROFILE_BASE64`, `IOS_CERT_BASE64`, or `IOS_CERT_PASSWORD`. Use the
+downloaded IPA as the input to your own signing/install tool. Turn
+`ios_prisonbreak` off only when you want DCloud to sign the IPA with Apple
+certificate files stored in GitHub Secrets.

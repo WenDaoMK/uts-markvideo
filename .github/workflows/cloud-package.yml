@@ -27,6 +27,11 @@ on:
           - "0"
           - "1"
           - "2"
+      ios_prisonbreak:
+        description: Build unsigned iOS prisonbreak IPA for later self-signing
+        required: true
+        type: boolean
+        default: true
 
 jobs:
   package:
@@ -44,7 +49,7 @@ jobs:
       IOS_BUNDLE_ID: ${{ vars.IOS_BUNDLE_ID }}
       IOS_SUPPORTED_DEVICE: ${{ vars.IOS_SUPPORTED_DEVICE }}
       IOS_CHANNELS: ${{ vars.IOS_CHANNELS }}
-      IOS_IS_PRISONBREAK: ${{ vars.IOS_IS_PRISONBREAK }}
+      IOS_IS_PRISONBREAK: ${{ inputs.ios_prisonbreak }}
       HBUILDERX_URL: ${{ vars.HBUILDERX_URL }}
 
     steps:
