@@ -75,6 +75,20 @@ test('Android camera MVP records microphone audio into the MP4', async () => {
   assert.match(activity, /audio\/mp4a-latm/);
 });
 
+test('Android recorder has a local clamp helper for YUV conversion', async () => {
+  const activity = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-android/MarkVideoCameraActivity.kt'),
+    'utf8',
+  );
+  const recorderStart = activity.indexOf('private class CameraMp4Recorder');
+  const companionStart = activity.indexOf('private companion object', recorderStart);
+
+  assert.notEqual(recorderStart, -1, 'CameraMp4Recorder body should be present');
+  assert.notEqual(companionStart, -1, 'CameraMp4Recorder should end before companion object');
+  const recorderBody = activity.slice(recorderStart, companionStart);
+  assert.match(recorderBody, /private fun clamp\(value: Int\): Int/);
+});
+
 test('iOS MVP uses AVFoundation for camera, audio, watermark, and writing', async () => {
   const swift = await readFile(
     path.join(root, 'uni_modules/uts-markvideo/utssdk/app-ios/MarkVideoRecorder.swift'),

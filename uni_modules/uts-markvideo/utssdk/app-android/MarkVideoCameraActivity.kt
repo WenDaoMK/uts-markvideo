@@ -904,6 +904,10 @@ class MarkVideoCameraActivity : Activity() {
             return colorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar ||
                 colorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420PackedPlanar
         }
+
+        private fun clamp(value: Int): Int {
+            return min(255, max(0, value))
+        }
     }
 
         private companion object {
