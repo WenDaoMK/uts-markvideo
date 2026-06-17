@@ -145,6 +145,22 @@ test('Android frame conversion runs off the camera callback thread', async () =>
   assert.match(activity, /setOnImageAvailableListener\(\{ reader ->[\s\S]*handleNextImage\(reader\)[\s\S]*\}, frameHandler\)/);
 });
 
+test('Android recorder operations are serialized on a dedicated recorder thread', async () => {
+  const activity = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-android/MarkVideoCameraActivity.kt'),
+    'utf8',
+  );
+
+  assert.match(activity, /private var recorderThread: HandlerThread\? = null/);
+  assert.match(activity, /private var recorderHandler: Handler\? = null/);
+  assert.match(activity, /HandlerThread\("uts-markvideo-recorder"\)/);
+  assert.match(activity, /private fun startRecorderThread\(\)/);
+  assert.match(activity, /private fun stopRecorderThread\(\)/);
+  assert.match(activity, /val handler = recorderHandler[\s\S]*handler\.post \{[\s\S]*nextRecorder\.start\(\)[\s\S]*recording = true[\s\S]*\}/);
+  assert.match(activity, /val handler = recorderHandler[\s\S]*handler\.post \{[\s\S]*activeRecorder\.encodeFrame\(bitmap\)[\s\S]*bitmap\.recycle\(\)[\s\S]*\}/);
+  assert.match(activity, /val handler = recorderHandler[\s\S]*handler\.post \{[\s\S]*activeRecorder\?\.finish\(\)[\s\S]*\}/);
+});
+
 test('iOS MVP uses AVFoundation for camera, audio, watermark, and writing', async () => {
   const swift = await readFile(
     path.join(root, 'uni_modules/uts-markvideo/utssdk/app-ios/MarkVideoRecorder.swift'),

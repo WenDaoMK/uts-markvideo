@@ -61,6 +61,8 @@ class MarkVideoCameraActivity : Activity() {
     private var cameraHandler: Handler? = null
     private var processingThread: HandlerThread? = null
     private var processingHandler: Handler? = null
+    private var recorderThread: HandlerThread? = null
+    private var recorderHandler: Handler? = null
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var imageReader: ImageReader? = null
@@ -69,7 +71,7 @@ class MarkVideoCameraActivity : Activity() {
     private val processingFrame = AtomicBoolean(false)
 
     @Volatile private var recording = false
-    private var recorder: CameraMp4Recorder? = null
+    @Volatile private var recorder: CameraMp4Recorder? = null
     private var outputFile: File? = null
     private var recordingStartedAt = 0L
     private var completed = false
@@ -116,6 +118,7 @@ class MarkVideoCameraActivity : Activity() {
         closeCamera()
         stopCameraThread()
         stopProcessingThread()
+        stopRecorderThread()
         if (!completed) {
             MarkVideoNative.failCameraRecorder("Recorder closed before a video was created.")
         }
@@ -233,7 +236,12 @@ class MarkVideoCameraActivity : Activity() {
     }
 
     private fun startRecording() {
-        val handler = cameraHandler ?: return
+        startRecorderThread()
+        val handler = recorderHandler
+        if (handler == null) {
+            finishWithError("Recorder thread is not running.")
+            return
+        }
         recordButton.isEnabled = false
         stopButton.isEnabled = true
         statusView.text = "Recording with burned-in watermark..."
@@ -251,8 +259,13 @@ class MarkVideoCameraActivity : Activity() {
                 outputFile = file
                 recorder = nextRecorder
                 recordingStartedAt = System.currentTimeMillis()
+                lastEncodedFrameNs = 0L
                 recording = true
             } catch (throwable: Throwable) {
+                recording = false
+                recorder = null
+                outputFile?.delete()
+                outputFile = null
                 runOnUiThread {
                     recordButton.isEnabled = true
                     stopButton.isEnabled = false
@@ -263,13 +276,14 @@ class MarkVideoCameraActivity : Activity() {
     }
 
     private fun stopRecording(deleteFile: Boolean) {
-        val handler = cameraHandler
+        val handler = recorderHandler
         recordButton.isEnabled = false
         stopButton.isEnabled = false
         statusView.text = "Finishing MP4..."
+        recording = false
 
         if (handler == null) {
-            finishWithError("Camera thread is not running.")
+            finishWithError("Recorder thread is not running.")
             return
         }
 
@@ -338,6 +352,35 @@ class MarkVideoCameraActivity : Activity() {
         processingThread?.quitSafely()
         processingThread = null
         processingHandler = null
+    }
+
+    private fun startRecorderThread() {
+        if (recorderThread != null) return
+        recorderThread = HandlerThread("uts-markvideo-recorder").also {
+            it.start()
+            recorderHandler = Handler(it.looper)
+        }
+    }
+
+    private fun stopRecorderThread() {
+        val handler = recorderHandler
+        val thread = recorderThread
+        recording = false
+        recorderHandler = null
+        recorderThread = null
+        if (handler == null || thread == null) return
+        handler.post {
+            val activeRecorder = recorder
+            val file = outputFile
+            recorder = null
+            outputFile = null
+            try {
+                activeRecorder?.finish()
+            } catch (_: Throwable) {
+            }
+            file?.delete()
+            thread.quitSafely()
+        }
     }
 
     private fun openCamera() {
@@ -447,6 +490,7 @@ class MarkVideoCameraActivity : Activity() {
             return
         }
 
+        var postedToRecorder = false
         try {
             if (!recording) {
                 return
@@ -455,11 +499,30 @@ class MarkVideoCameraActivity : Activity() {
                 return
             }
             val bitmap = drawWatermark(image.toBitmap())
-            try {
-                recorder?.encodeFrame(bitmap)
-            } finally {
+            val activeRecorder = recorder
+            val handler = recorderHandler
+            if (activeRecorder == null || handler == null) {
                 bitmap.recycle()
+                return
             }
+            handler.post {
+                try {
+                    if (recording) {
+                        activeRecorder.encodeFrame(bitmap)
+                    }
+                } catch (throwable: Throwable) {
+                    if (recording) {
+                        runOnUiThread {
+                            statusView.text = throwable.message ?: "Frame encode failed."
+                        }
+                    }
+                } finally {
+                    bitmap.recycle()
+                    processingFrame.set(false)
+                }
+            }
+            postedToRecorder = true
+            return
         } catch (throwable: Throwable) {
             if (recording) {
                 runOnUiThread {
@@ -468,7 +531,9 @@ class MarkVideoCameraActivity : Activity() {
             }
         } finally {
             image.close()
-            processingFrame.set(false)
+            if (!postedToRecorder) {
+                processingFrame.set(false)
+            }
         }
     }
 
