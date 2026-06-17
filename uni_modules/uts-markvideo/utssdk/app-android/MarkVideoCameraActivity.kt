@@ -32,10 +32,10 @@ import android.os.HandlerThread
 import android.os.Looper
 import android.util.Size
 import android.view.Gravity
-import android.view.View
+import android.view.Surface
+import android.view.TextureView
 import android.widget.Button
 import android.widget.FrameLayout
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import java.io.File
@@ -52,16 +52,19 @@ class MarkVideoCameraActivity : Activity() {
         intent.getIntExtra(MarkVideoNative.EXTRA_FPS, 15).coerceIn(8, 24)
     }
 
-    private lateinit var previewView: ImageView
+    private lateinit var previewView: TextureView
     private lateinit var statusView: TextView
     private lateinit var recordButton: Button
     private lateinit var stopButton: Button
 
     private var cameraThread: HandlerThread? = null
     private var cameraHandler: Handler? = null
+    private var processingThread: HandlerThread? = null
+    private var processingHandler: Handler? = null
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var imageReader: ImageReader? = null
+    private var previewSurface: Surface? = null
     private var captureSize: Size = Size(640, 480)
     private val processingFrame = AtomicBoolean(false)
 
@@ -70,16 +73,14 @@ class MarkVideoCameraActivity : Activity() {
     private var outputFile: File? = null
     private var recordingStartedAt = 0L
     private var completed = false
-    private var previewFrameCounter = 0
+    private val frameIntervalNs: Long by lazy { 1_000_000_000L / targetFps }
+    private var lastEncodedFrameNs = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         buildUi()
 
-        if (hasRequiredPermissions()) {
-            startCameraThread()
-            openCamera()
-        } else {
+        if (!hasRequiredPermissions()) {
             requestRequiredPermissions()
         }
     }
@@ -91,8 +92,10 @@ class MarkVideoCameraActivity : Activity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQUEST_REQUIRED_PERMISSIONS && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-            startCameraThread()
-            openCamera()
+            if (previewView.isAvailable) {
+                startCameraThread()
+                openCamera()
+            }
         } else {
             finishWithError("Camera or microphone permission denied.")
         }
@@ -112,6 +115,7 @@ class MarkVideoCameraActivity : Activity() {
     override fun onDestroy() {
         closeCamera()
         stopCameraThread()
+        stopProcessingThread()
         if (!completed) {
             MarkVideoNative.failCameraRecorder("Recorder closed before a video was created.")
         }
@@ -123,9 +127,34 @@ class MarkVideoCameraActivity : Activity() {
             setBackgroundColor(Color.rgb(16, 22, 30))
         }
 
-        previewView = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP
+        previewView = TextureView(this).apply {
             setBackgroundColor(Color.BLACK)
+            surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                override fun onSurfaceTextureAvailable(
+                    surface: android.graphics.SurfaceTexture,
+                    width: Int,
+                    height: Int
+                ) {
+                    if (hasRequiredPermissions()) {
+                        startCameraThread()
+                        openCamera()
+                    }
+                }
+
+                override fun onSurfaceTextureSizeChanged(
+                    surface: android.graphics.SurfaceTexture,
+                    width: Int,
+                    height: Int
+                ) = Unit
+
+                override fun onSurfaceTextureDestroyed(surface: android.graphics.SurfaceTexture): Boolean {
+                    closeCamera()
+                    stopCameraThread()
+                    stopProcessingThread()
+                    return true
+                }
+                override fun onSurfaceTextureUpdated(surface: android.graphics.SurfaceTexture) = Unit
+            }
         }
         root.addView(previewView, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
@@ -284,6 +313,7 @@ class MarkVideoCameraActivity : Activity() {
     }
 
     private fun startCameraThread() {
+        if (cameraThread != null) return
         cameraThread = HandlerThread("uts-markvideo-camera").also {
             it.start()
             cameraHandler = Handler(it.looper)
@@ -296,9 +326,27 @@ class MarkVideoCameraActivity : Activity() {
         cameraHandler = null
     }
 
+    private fun startProcessingThread() {
+        if (processingThread != null) return
+        processingThread = HandlerThread("uts-markvideo-processing").also {
+            it.start()
+            processingHandler = Handler(it.looper)
+        }
+    }
+
+    private fun stopProcessingThread() {
+        processingThread?.quitSafely()
+        processingThread = null
+        processingHandler = null
+    }
+
     private fun openCamera() {
         val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
         val handler = cameraHandler ?: return
+        startProcessingThread()
+        val frameHandler = processingHandler ?: handler
+        if (cameraDevice != null) return
+        if (!previewView.isAvailable) return
 
         try {
             val cameraId = selectBackCamera(manager)
@@ -312,7 +360,7 @@ class MarkVideoCameraActivity : Activity() {
             ).apply {
                 setOnImageAvailableListener({ reader ->
                     handleNextImage(reader)
-                }, handler)
+                }, frameHandler)
             }
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !hasRequiredPermissions()) {
@@ -332,6 +380,8 @@ class MarkVideoCameraActivity : Activity() {
         cameraDevice = null
         imageReader?.close()
         imageReader = null
+        previewSurface?.release()
+        previewSurface = null
     }
 
     private val cameraStateCallback = object : CameraDevice.StateCallback() {
@@ -355,13 +405,19 @@ class MarkVideoCameraActivity : Activity() {
         val camera = cameraDevice ?: return
         val reader = imageReader ?: return
         val handler = cameraHandler ?: return
+        val previewTexture = previewView.surfaceTexture ?: return
+        previewTexture.setDefaultBufferSize(captureSize.width, captureSize.height)
+        previewSurface?.release()
+        previewSurface = Surface(previewTexture)
+        val activePreviewSurface = previewSurface ?: return
 
         camera.createCaptureSession(
-            listOf(reader.surface),
+            listOf(activePreviewSurface, reader.surface),
             object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     captureSession = session
                     val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                        addTarget(activePreviewSurface)
                         addTarget(reader.surface)
                         set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                     }.build()
@@ -392,15 +448,17 @@ class MarkVideoCameraActivity : Activity() {
         }
 
         try {
-            val bitmap = drawWatermark(image.toBitmap())
-            if (recording) {
-                recorder?.encodeFrame(bitmap)
+            if (!recording) {
+                return
             }
-            previewFrameCounter += 1
-            if (previewFrameCounter % 2 == 0) {
-                runOnUiThread {
-                    previewView.setImageBitmap(bitmap)
-                }
+            if (!shouldEncodeFrame(System.nanoTime())) {
+                return
+            }
+            val bitmap = drawWatermark(image.toBitmap())
+            try {
+                recorder?.encodeFrame(bitmap)
+            } finally {
+                bitmap.recycle()
             }
         } catch (throwable: Throwable) {
             if (recording) {
@@ -412,6 +470,14 @@ class MarkVideoCameraActivity : Activity() {
             image.close()
             processingFrame.set(false)
         }
+    }
+
+    private fun shouldEncodeFrame(nowNs: Long): Boolean {
+        if (lastEncodedFrameNs == 0L || nowNs - lastEncodedFrameNs >= frameIntervalNs) {
+            lastEncodedFrameNs = nowNs
+            return true
+        }
+        return false
     }
 
     private fun drawWatermark(source: Bitmap): Bitmap {
@@ -560,6 +626,8 @@ class MarkVideoCameraActivity : Activity() {
         private var videoTrackIndex = -1
         private var audioTrackIndex = -1
         private var muxerStarted = false
+        private val pixelBuffer = IntArray(frameSize)
+        private val yuvBuffer = ByteArray(frameSize + quarterFrameSize * 2)
         var frameCount: Int = 0
             private set
 
@@ -632,15 +700,14 @@ class MarkVideoCameraActivity : Activity() {
             val inputIndex = activeEncoder.dequeueInputBuffer(TIMEOUT_US)
             if (inputIndex >= 0) {
                 val inputBuffer = activeEncoder.getInputBuffer(inputIndex) ?: return
-                val pixels = IntArray(frameSize)
-                bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
-                val yuv = argbToYuv420(pixels)
+                bitmap.getPixels(pixelBuffer, 0, width, 0, 0, width, height)
+                argbToYuv420(pixelBuffer, yuvBuffer)
                 inputBuffer.clear()
-                inputBuffer.put(yuv)
+                inputBuffer.put(yuvBuffer)
                 activeEncoder.queueInputBuffer(
                     inputIndex,
                     0,
-                    yuv.size,
+                    yuvBuffer.size,
                     presentationTimeUs(frameCount),
                     0
                 )
@@ -839,8 +906,7 @@ class MarkVideoCameraActivity : Activity() {
             }
         }
 
-        private fun argbToYuv420(pixels: IntArray): ByteArray {
-            val yuv = ByteArray(frameSize + quarterFrameSize * 2)
+        private fun argbToYuv420(pixels: IntArray, yuv: ByteArray) {
             val planar = isPlanar(colorFormat)
             var yIndex = 0
 
@@ -869,8 +935,6 @@ class MarkVideoCameraActivity : Activity() {
                     }
                 }
             }
-
-            return yuv
         }
 
         private fun presentationTimeUs(frameIndex: Int): Long {

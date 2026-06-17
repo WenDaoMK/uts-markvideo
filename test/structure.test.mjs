@@ -92,6 +92,59 @@ test('Android recorder YUV conversion does not depend on an outer clamp helper',
   assert.match(recorderBody, /val v = min\(255, max\(0,/);
 });
 
+test('Android camera preview does not CPU-convert frames while idle', async () => {
+  const activity = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-android/MarkVideoCameraActivity.kt'),
+    'utf8',
+  );
+
+  assert.match(activity, /import android\.view\.TextureView/);
+  assert.match(activity, /CameraDevice\.TEMPLATE_RECORD[\s\S]*addTarget\(activePreviewSurface\)[\s\S]*addTarget\(reader\.surface\)/);
+  assert.match(activity, /if \(!recording\) \{[\s\S]*return[\s\S]*if \(!shouldEncodeFrame/);
+  assert.doesNotMatch(activity, /setImageBitmap/);
+});
+
+test('Android recorder reuses frame buffers during encoding', async () => {
+  const activity = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-android/MarkVideoCameraActivity.kt'),
+    'utf8',
+  );
+  const recorderStart = activity.indexOf('private class CameraMp4Recorder');
+  const companionStart = activity.indexOf('private companion object', recorderStart);
+
+  assert.notEqual(recorderStart, -1, 'CameraMp4Recorder body should be present');
+  assert.notEqual(companionStart, -1, 'CameraMp4Recorder should end before companion object');
+  const recorderBody = activity.slice(recorderStart, companionStart);
+  assert.match(recorderBody, /private val pixelBuffer = IntArray\(frameSize\)/);
+  assert.match(recorderBody, /private val yuvBuffer = ByteArray\(frameSize \+ quarterFrameSize \* 2\)/);
+  assert.doesNotMatch(recorderBody, /val pixels = IntArray\(frameSize\)/);
+  assert.doesNotMatch(recorderBody, /val yuv = ByteArray\(frameSize \+ quarterFrameSize \* 2\)/);
+});
+
+test('Android camera recorder samples frames at the requested fps', async () => {
+  const activity = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-android/MarkVideoCameraActivity.kt'),
+    'utf8',
+  );
+
+  assert.match(activity, /private val frameIntervalNs: Long by lazy \{ 1_000_000_000L \/ targetFps \}/);
+  assert.match(activity, /private var lastEncodedFrameNs = 0L/);
+  assert.match(activity, /if \(!shouldEncodeFrame\(System\.nanoTime\(\)\)\) \{[\s\S]*return[\s\S]*val bitmap = drawWatermark/);
+  assert.match(activity, /private fun shouldEncodeFrame\(nowNs: Long\): Boolean/);
+});
+
+test('Android frame conversion runs off the camera callback thread', async () => {
+  const activity = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-android/MarkVideoCameraActivity.kt'),
+    'utf8',
+  );
+
+  assert.match(activity, /private var processingThread: HandlerThread\? = null/);
+  assert.match(activity, /private var processingHandler: Handler\? = null/);
+  assert.match(activity, /HandlerThread\("uts-markvideo-processing"\)/);
+  assert.match(activity, /setOnImageAvailableListener\(\{ reader ->[\s\S]*handleNextImage\(reader\)[\s\S]*\}, frameHandler\)/);
+});
+
 test('iOS MVP uses AVFoundation for camera, audio, watermark, and writing', async () => {
   const swift = await readFile(
     path.join(root, 'uni_modules/uts-markvideo/utssdk/app-ios/MarkVideoRecorder.swift'),
