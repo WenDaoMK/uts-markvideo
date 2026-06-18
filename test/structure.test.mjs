@@ -178,6 +178,126 @@ test('iOS MVP uses AVFoundation for camera, audio, watermark, and writing', asyn
   assert.doesNotMatch(iosBridge, /not implemented/i);
 });
 
+test('iOS recorder stays compatible with older deployment targets', async () => {
+  const swift = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-ios/MarkVideoRecorder.swift'),
+    'utf8',
+  );
+
+  assert.match(swift, /if #available\(iOS 10\.0, \*\)/);
+  assert.match(swift, /NSTemporaryDirectory\(\)/);
+  assert.match(swift, /AVVideoCodecH264/);
+  assert.doesNotMatch(swift, /FileManager\.default\.temporaryDirectory/);
+  assert.doesNotMatch(swift, /AVVideoCodecType\.h264/);
+});
+
+test('iOS watermark rendering is upright and not mirrored', async () => {
+  const swift = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-ios/MarkVideoRecorder.swift'),
+    'utf8',
+  );
+
+  assert.match(swift, /automaticallyAdjustsVideoMirroring = false/);
+  assert.match(swift, /isVideoMirrored = false/);
+  assert.match(swift, /context\.translateBy\(x: 0, y: CGFloat\(height\)\)/);
+  assert.match(swift, /context\.scaleBy\(x: 1, y: -1\)/);
+});
+
+test('iOS camera recorder samples frames at the requested fps', async () => {
+  const swift = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-ios/MarkVideoRecorder.swift'),
+    'utf8',
+  );
+
+  assert.match(swift, /private var frameInterval: CMTime/);
+  assert.match(swift, /private var lastEncodedFrameTime: CMTime\?/);
+  assert.match(swift, /private func shouldEncodeFrame\(at timestamp: CMTime\) -> Bool/);
+  assert.match(swift, /guard shouldEncodeFrame\(at: timestamp\) else \{ return \}/);
+});
+
+test('iOS recorder validates frame output and cleans temporary files', async () => {
+  const swift = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-ios/MarkVideoRecorder.swift'),
+    'utf8',
+  );
+
+  assert.match(swift, /private var videoFrameCount = 0/);
+  assert.match(swift, /guard videoFrameCount > 0 else/);
+  assert.match(swift, /private func failNoFrames\(outputURL: URL\)/);
+  assert.match(swift, /private func failWriter\(outputURL: URL, message: String\)/);
+  assert.match(swift, /guard writer\.status == \.completed else/);
+  assert.match(swift, /private func finishWithError\(_ message: String\)/);
+  assert.match(swift, /No frames were recorded\./);
+  assert.match(swift, /try\? FileManager\.default\.removeItem\(at: outputURL\)/);
+});
+
+test('iOS recorder operations stay serialized on the writer queue', async () => {
+  const swift = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-ios/MarkVideoRecorder.swift'),
+    'utf8',
+  );
+
+  assert.match(swift, /private let writerQueue = DispatchQueue\(label: "uts\.markvideo\.writer"\)/);
+  assert.match(swift, /writerQueue\.async \{[\s\S]*try self\.prepareWriter\(\)[\s\S]*self\.recording = true[\s\S]*\}/);
+  assert.match(swift, /writerQueue\.async \{[\s\S]*self\.recording = false[\s\S]*writer\.finishWriting/);
+  assert.match(swift, /func captureOutput[\s\S]*guard recording else \{ return \}/);
+});
+
+test('iOS recorder rejects duplicate start taps before preparing a new writer', async () => {
+  const swift = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-ios/MarkVideoRecorder.swift'),
+    'utf8',
+  );
+
+  assert.match(swift, /@objc private func startRecording\(\) \{[\s\S]*startButton\.isEnabled = false[\s\S]*writerQueue\.async/);
+  assert.match(swift, /guard !self\.recording && self\.assetWriter == nil else/);
+  assert.match(swift, /guard !self\.recording && self\.assetWriter == nil else[\s\S]*return[\s\S]*do \{[\s\S]*try self\.prepareWriter\(\)/);
+});
+
+test('iOS recorder reports writer preparation failures through the fail callback', async () => {
+  const swift = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-ios/MarkVideoRecorder.swift'),
+    'utf8',
+  );
+
+  assert.match(swift, /catch \{[\s\S]*self\.recording = false[\s\S]*self\.resetWriter\(\)[\s\S]*self\.finishWithError\(error\.localizedDescription\)/);
+});
+
+test('iOS recorder fails immediately when required capture inputs or outputs cannot be added', async () => {
+  const swift = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-ios/MarkVideoRecorder.swift'),
+    'utf8',
+  );
+
+  assert.match(swift, /guard session\.canAddInput\(videoInput\) else/);
+  assert.match(swift, /guard session\.canAddInput\(micInput\) else/);
+  assert.match(swift, /guard session\.canAddOutput\(videoOutput\) else/);
+  assert.match(swift, /guard session\.canAddOutput\(audioOutput\) else/);
+  assert.doesNotMatch(swift, /if session\.canAddInput\(videoInput\) \{/);
+  assert.doesNotMatch(swift, /if session\.canAddOutput\(audioOutput\) \{/);
+});
+
+test('iOS recorder rejects duplicate API calls without replacing callbacks', async () => {
+  const swift = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-ios/MarkVideoRecorder.swift'),
+    'utf8',
+  );
+
+  assert.match(swift, /guard success == nil && failure == nil else \{[\s\S]*onFail\("Recorder is already running\."\)[\s\S]*return[\s\S]*\}[\s\S]*success = onSuccess[\s\S]*failure = onFail/);
+});
+
+test('iOS recorder duration only advances after a frame is appended', async () => {
+  const swift = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-ios/MarkVideoRecorder.swift'),
+    'utf8',
+  );
+
+  const appendSuccessBlock = /if adaptor\.append\(watermarkedBuffer, withPresentationTime: timestamp\) \{([\s\S]*?)\n        \}/.exec(swift)?.[1] ?? '';
+  assert.match(appendSuccessBlock, /lastVideoTime = timestamp/);
+  assert.match(appendSuccessBlock, /videoFrameCount \+= 1/);
+  assert.doesNotMatch(swift, /lastVideoTime = timestamp[\s\S]*guard writer\.status == \.writing/);
+});
+
 test('native app declares camera and microphone privacy strings', async () => {
   const manifest = await readFile(path.join(root, 'manifest.json'), 'utf8');
   const iosPlist = await readFile(

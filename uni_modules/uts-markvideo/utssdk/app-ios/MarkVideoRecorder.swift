@@ -3,19 +3,23 @@ import CoreImage
 import UIKit
 
 public class MarkVideoRecorder: NSObject {
-    private static var success: ((String, Double, Double, Double, String) -> Void)?
+    private static var success: ((String, NSNumber, NSNumber, NSNumber, String) -> Void)?
     private static var failure: ((String) -> Void)?
 
     @objc public static func openCameraRecorder(
         _ text: String,
         _ fps: NSNumber,
-        _ onSuccess: @escaping (String, Double, Double, Double, String) -> Void,
+        _ onSuccess: @escaping (String, NSNumber, NSNumber, NSNumber, String) -> Void,
         _ onFail: @escaping (String) -> Void
     ) {
-        success = onSuccess
-        failure = onFail
-
         DispatchQueue.main.async {
+            guard success == nil && failure == nil else {
+                onFail("Recorder is already running.")
+                return
+            }
+            success = onSuccess
+            failure = onFail
+
             requestPermissions { granted in
                 guard granted else {
                     fail("Camera or microphone permission denied.")
@@ -44,7 +48,7 @@ public class MarkVideoRecorder: NSObject {
         let callback = success
         success = nil
         failure = nil
-        callback?(path, durationMs, Double(width), Double(height), watermark)
+        callback?(path, NSNumber(value: durationMs), NSNumber(value: width), NSNumber(value: height), watermark)
     }
 
     fileprivate static func fail(_ message: String) {
@@ -65,11 +69,16 @@ public class MarkVideoRecorder: NSObject {
     }
 
     private static func topViewController() -> UIViewController? {
-        let root = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap { $0.windows }
-            .first { $0.isKeyWindow }?
-            .rootViewController
+        let root: UIViewController?
+        if #available(iOS 13.0, *) {
+            root = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap { $0.windows }
+                .first { $0.isKeyWindow }?
+                .rootViewController
+        } else {
+            root = UIApplication.shared.keyWindow?.rootViewController
+        }
         var top = root
         while let presented = top?.presentedViewController {
             top = presented
@@ -97,10 +106,15 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
     private var pixelBufferAdaptor: AVAssetWriterInputPixelBufferAdaptor?
     private var firstVideoTime: CMTime?
     private var lastVideoTime: CMTime?
+    private var lastEncodedFrameTime: CMTime?
     private var outputURL: URL?
     private var recording = false
     private var completed = false
+    private var videoFrameCount = 0
     private var videoSize = CGSize(width: 720, height: 1280)
+    private var frameInterval: CMTime {
+        CMTime(value: 1, timescale: CMTimeScale(fps))
+    }
 
     init(watermark: String, fps: Int) {
         self.watermark = watermark
@@ -198,22 +212,23 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
         session.sessionPreset = .hd1280x720
 
         do {
-            guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) ??
-                AVCaptureDevice.default(for: .video) else {
+            guard let camera = defaultVideoCamera() else {
                 throw NSError(domain: "uts.markvideo", code: 1, userInfo: [NSLocalizedDescriptionKey: "No camera device."])
             }
             let videoInput = try AVCaptureDeviceInput(device: camera)
-            if session.canAddInput(videoInput) {
-                session.addInput(videoInput)
+            guard session.canAddInput(videoInput) else {
+                throw NSError(domain: "uts.markvideo", code: 4, userInfo: [NSLocalizedDescriptionKey: "Cannot add camera input."])
             }
+            session.addInput(videoInput)
 
             guard let microphone = AVCaptureDevice.default(for: .audio) else {
                 throw NSError(domain: "uts.markvideo", code: 2, userInfo: [NSLocalizedDescriptionKey: "No microphone device."])
             }
             let micInput = try AVCaptureDeviceInput(device: microphone)
-            if session.canAddInput(micInput) {
-                session.addInput(micInput)
+            guard session.canAddInput(micInput) else {
+                throw NSError(domain: "uts.markvideo", code: 5, userInfo: [NSLocalizedDescriptionKey: "Cannot add microphone input."])
             }
+            session.addInput(micInput)
 
             let videoOutput = AVCaptureVideoDataOutput()
             videoOutput.videoSettings = [
@@ -221,19 +236,28 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
             ]
             videoOutput.alwaysDiscardsLateVideoFrames = true
             videoOutput.setSampleBufferDelegate(self, queue: writerQueue)
-            if session.canAddOutput(videoOutput) {
-                session.addOutput(videoOutput)
+            guard session.canAddOutput(videoOutput) else {
+                throw NSError(domain: "uts.markvideo", code: 6, userInfo: [NSLocalizedDescriptionKey: "Cannot add video output."])
             }
-            videoOutput.connection(with: .video)?.videoOrientation = .portrait
+            session.addOutput(videoOutput)
+            if let videoConnection = videoOutput.connection(with: .video) {
+                videoConnection.videoOrientation = .portrait
+                if videoConnection.isVideoMirroringSupported {
+                    videoConnection.automaticallyAdjustsVideoMirroring = false
+                    videoConnection.isVideoMirrored = false
+                }
+            }
 
             let audioOutput = AVCaptureAudioDataOutput()
             audioOutput.setSampleBufferDelegate(self, queue: writerQueue)
-            if session.canAddOutput(audioOutput) {
-                session.addOutput(audioOutput)
+            guard session.canAddOutput(audioOutput) else {
+                throw NSError(domain: "uts.markvideo", code: 7, userInfo: [NSLocalizedDescriptionKey: "Cannot add audio output."])
             }
+            session.addOutput(audioOutput)
         } catch {
-            MarkVideoRecorder.fail(error.localizedDescription)
-            dismiss(animated: true)
+            session.commitConfiguration()
+            finishWithError(error.localizedDescription)
+            return
         }
 
         session.commitConfiguration()
@@ -245,21 +269,39 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
     }
 
     @objc private func startRecording() {
+        startButton.isEnabled = false
+        stopButton.isEnabled = false
+        statusLabel.text = "Starting recorder..."
+
         writerQueue.async {
+            guard !self.recording && self.assetWriter == nil else {
+                DispatchQueue.main.async {
+                    self.startButton.isEnabled = false
+                    self.stopButton.isEnabled = true
+                    self.statusLabel.text = "Recording with burned-in watermark..."
+                }
+                return
+            }
+
             do {
                 try self.prepareWriter()
                 self.recording = true
                 self.firstVideoTime = nil
                 self.lastVideoTime = nil
+                self.lastEncodedFrameTime = nil
+                self.videoFrameCount = 0
                 DispatchQueue.main.async {
                     self.startButton.isEnabled = false
                     self.stopButton.isEnabled = true
-                    self.statusLabel.text = "Recording video and audio..."
+                    self.statusLabel.text = "Recording with burned-in watermark..."
                 }
             } catch {
-                DispatchQueue.main.async {
-                    self.statusLabel.text = error.localizedDescription
+                self.recording = false
+                if let outputURL = self.outputURL {
+                    try? FileManager.default.removeItem(at: outputURL)
                 }
+                self.resetWriter()
+                self.finishWithError(error.localizedDescription)
             }
         }
     }
@@ -271,47 +313,100 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
 
         writerQueue.async {
             self.recording = false
-            guard let writer = self.assetWriter, let outputURL = self.outputURL else {
-                DispatchQueue.main.async {
-                    MarkVideoRecorder.fail("Writer was not started.")
-                    self.dismiss(animated: true)
-                }
+            guard let outputURL = self.outputURL else {
+                self.finishWithError("Writer was not started.")
                 return
             }
+            self.finishRecordingOnWriterQueue(outputURL: outputURL)
+        }
+    }
 
-            self.videoInput?.markAsFinished()
-            self.audioInput?.markAsFinished()
-            writer.finishWriting {
-                let durationMs: Double
-                if let first = self.firstVideoTime, let last = self.lastVideoTime {
-                    durationMs = max(1, CMTimeSubtract(last, first).seconds * 1000)
-                } else {
-                    durationMs = 0
-                }
-                DispatchQueue.main.async {
-                    self.completed = true
-                    MarkVideoRecorder.complete(
-                        path: outputURL.path,
-                        durationMs: durationMs,
-                        width: Int(self.videoSize.width),
-                        height: Int(self.videoSize.height),
-                        watermark: self.watermark
-                    )
-                    self.dismiss(animated: true)
-                }
+    private func handleFinishedWriting(outputURL: URL, writer: AVAssetWriter) {
+        guard writer.status == .completed else {
+            failWriter(outputURL: outputURL, message: writer.error?.localizedDescription ?? "Recorder finish failed.")
+            return
+        }
+
+        guard videoFrameCount > 0 else {
+            failNoFrames(outputURL: outputURL)
+            return
+        }
+
+        let durationMs: Double
+        if let first = firstVideoTime, let last = lastVideoTime {
+            durationMs = max(1, CMTimeSubtract(last, first).seconds * 1000)
+        } else {
+            durationMs = 0
+        }
+        resetWriter()
+        DispatchQueue.main.async {
+            self.completed = true
+            MarkVideoRecorder.complete(
+                path: outputURL.path,
+                durationMs: durationMs,
+                width: Int(self.videoSize.width),
+                height: Int(self.videoSize.height),
+                watermark: self.watermark
+            )
+            self.dismiss(animated: true)
+        }
+    }
+
+    private func finishRecordingOnWriterQueue(outputURL: URL) {
+        guard let writer = assetWriter else {
+            finishWithError("Writer was not started.")
+            return
+        }
+
+        guard videoFrameCount > 0 else {
+            if writer.status == .writing {
+                writer.cancelWriting()
+            }
+            failNoFrames(outputURL: outputURL)
+            return
+        }
+
+        videoInput?.markAsFinished()
+        audioInput?.markAsFinished()
+        writer.finishWriting {
+            self.writerQueue.async {
+                self.handleFinishedWriting(outputURL: outputURL, writer: writer)
             }
         }
     }
 
+    private func failNoFrames(outputURL: URL) {
+        try? FileManager.default.removeItem(at: outputURL)
+        resetWriter()
+        finishWithError("No frames were recorded.")
+    }
+
+    private func failWriter(outputURL: URL, message: String) {
+        try? FileManager.default.removeItem(at: outputURL)
+        resetWriter()
+        finishWithError(message)
+    }
+
+    private func finishWithError(_ message: String) {
+        DispatchQueue.main.async {
+            if self.completed {
+                return
+            }
+            self.completed = true
+            MarkVideoRecorder.fail(message)
+            self.dismiss(animated: true)
+        }
+    }
+
     private func prepareWriter() throws {
-        let url = FileManager.default.temporaryDirectory
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("uts-ios-watermark-\(Int(Date().timeIntervalSince1970 * 1000)).mp4")
         try? FileManager.default.removeItem(at: url)
         outputURL = url
 
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         let videoSettings: [String: Any] = [
-            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoCodecKey: AVVideoCodecH264,
             AVVideoWidthKey: Int(videoSize.width),
             AVVideoHeightKey: Int(videoSize.height)
         ]
@@ -349,6 +444,26 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
         self.pixelBufferAdaptor = adaptor
     }
 
+    private func defaultVideoCamera() -> AVCaptureDevice? {
+        if #available(iOS 10.0, *) {
+            return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) ??
+                AVCaptureDevice.default(for: .video)
+        }
+        return AVCaptureDevice.default(for: .video)
+    }
+
+    private func resetWriter() {
+        assetWriter = nil
+        videoInput = nil
+        audioInput = nil
+        pixelBufferAdaptor = nil
+        firstVideoTime = nil
+        lastVideoTime = nil
+        lastEncodedFrameTime = nil
+        outputURL = nil
+        videoFrameCount = 0
+    }
+
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard recording else { return }
 
@@ -368,16 +483,30 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
         else { return }
 
         let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        if firstVideoTime == nil {
-            firstVideoTime = timestamp
+        guard shouldEncodeFrame(at: timestamp) else { return }
+        if writer.status == .unknown {
             writer.startWriting()
             writer.startSession(atSourceTime: timestamp)
         }
-        lastVideoTime = timestamp
 
         guard writer.status == .writing, videoInput.isReadyForMoreMediaData else { return }
         guard let watermarkedBuffer = makeWatermarkedPixelBuffer(from: sourceBuffer, adaptor: adaptor) else { return }
-        adaptor.append(watermarkedBuffer, withPresentationTime: timestamp)
+        if adaptor.append(watermarkedBuffer, withPresentationTime: timestamp) {
+            if firstVideoTime == nil {
+                firstVideoTime = timestamp
+            }
+            lastEncodedFrameTime = timestamp
+            lastVideoTime = timestamp
+            videoFrameCount += 1
+        }
+    }
+
+    private func shouldEncodeFrame(at timestamp: CMTime) -> Bool {
+        guard let last = lastEncodedFrameTime else {
+            return true
+        }
+
+        return CMTimeCompare(CMTimeSubtract(timestamp, last), frameInterval) >= 0
     }
 
     private func appendAudio(_ sampleBuffer: CMSampleBuffer) {
@@ -420,6 +549,10 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
             bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
         ) else { return }
 
+        context.saveGState()
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
+
         let bandHeight = max(72, Int(Double(height) * 0.16))
         let rect = CGRect(
             x: CGFloat(width) * 0.06,
@@ -441,11 +574,25 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
         let textRect = rect.insetBy(dx: 16, dy: CGFloat(bandHeight) * 0.28)
         (watermark as NSString).draw(in: textRect, withAttributes: attributes)
         UIGraphicsPopContext()
+        context.restoreGState()
     }
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         if !completed {
+            completed = true
+            writerQueue.async {
+                self.recording = false
+                if let writer = self.assetWriter, writer.status == .writing {
+                    self.videoInput?.markAsFinished()
+                    self.audioInput?.markAsFinished()
+                    writer.cancelWriting()
+                }
+                if let outputURL = self.outputURL {
+                    try? FileManager.default.removeItem(at: outputURL)
+                }
+                self.resetWriter()
+            }
             MarkVideoRecorder.fail("Recording cancelled.")
         }
     }
