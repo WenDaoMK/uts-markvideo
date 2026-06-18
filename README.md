@@ -38,10 +38,10 @@ recorder.
 
 - `pages/index/index.vue` - demo page that configures the watermark and opens
   the recorder.
-- `docs/api.md` - current exported UTS API and its relationship to the embedded
-  camera PRD.
-- `docs/embedded-camera-component-prd.md` - cross-platform contract for the next
-  embedded watermark camera component.
+- `docs/embedded-camera-component-prd.md` - authoritative cross-platform
+  contract for the next embedded watermark camera component.
+- `docs/api.md` - historical API migration note; not the feature checklist for
+  the new embedded camera component.
 - `uni_modules/uts-markvideo/utssdk/interface.uts` - public plugin contract.
 - `uni_modules/uts-markvideo/utssdk/app-android/index.uts` - UTS Android bridge.
 - `uni_modules/uts-markvideo/utssdk/app-android/MarkVideoNative.kt` - UTS hybrid
