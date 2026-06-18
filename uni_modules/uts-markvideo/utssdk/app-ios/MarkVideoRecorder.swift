@@ -671,7 +671,23 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
             let filePath = String(path.dropFirst("file://".count))
             return UIImage(contentsOfFile: filePath)
         }
-        return UIImage(contentsOfFile: path)
+        if let image = UIImage(contentsOfFile: path) {
+            return image
+        }
+        let bundlePath = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        if let image = UIImage(named: bundlePath) {
+            return image
+        }
+        let resourceName = URL(fileURLWithPath: bundlePath).deletingPathExtension().path
+        let resourceExtension = URL(fileURLWithPath: bundlePath).pathExtension
+        if
+            !resourceName.isEmpty,
+            !resourceExtension.isEmpty,
+            let resourcePath = Bundle.main.path(forResource: resourceName, ofType: resourceExtension)
+        {
+            return UIImage(contentsOfFile: resourcePath)
+        }
+        return nil
     }
 
     private func watermarkDrawLayout(canvasSize: CGSize, state: WatermarkLayoutState) -> WatermarkDrawLayout {

@@ -4,10 +4,14 @@ This document defines the shared Page and native plugin contract. Native Android
 and iOS recorders only consume prepared watermark options; API requests and image
 asset preparation belong to the Page layer.
 
-## Watermark Logo Asset API
+## Watermark Image Source
 
-The Page requests preset watermark logo assets before opening the native camera.
-The native recorder must not request this API directly.
+`watermark.imagePath` follows the Android branch contract: it is a local image
+path or readable URI prepared by the Page layer before opening the native camera.
+The native recorder must not request remote image APIs directly.
+
+The Page may request preset watermark logo assets before opening the native
+camera:
 
 ```ts
 GET /api/watermark/logo-assets
@@ -39,8 +43,8 @@ Field semantics:
 
 Fallback behavior:
 
-- If the request fails or returns no usable `logos`, the Page may use a bundled
-  or mock preset.
+- If the request fails or returns no usable `logos`, the Page uses the bundled
+  `/static/watermark/company-logo.svg` preset.
 - Users can replace the preset with a local image. The local temp path is passed
   through the same `watermark.imagePath` field.
 
@@ -50,7 +54,7 @@ Fallback behavior:
 recordWatermarkVideo({
   watermark: {
     text: 'Project A',
-    imagePath: '<local temp path from Page download or local picker>',
+    imagePath: '<local path from bundled preset, Page download, or local picker>',
     x: 0.5,
     y: 0.78,
     textColor: '#ffffff',

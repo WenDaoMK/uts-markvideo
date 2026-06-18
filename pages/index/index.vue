@@ -87,7 +87,7 @@ const FALLBACK_LOGO_ASSETS = [
   {
     id: 'company-logo',
     name: '企业 Logo',
-    imageUrl: 'https://dummyimage.com/240x240/17212b/ffffff.png&text=LOGO',
+    imagePath: '/static/watermark/company-logo.svg',
     width: 72,
     height: 72
   }
@@ -101,13 +101,13 @@ export default {
       videoPath: '',
       photoSavedFilePaths: [],
       watermarkText: 'UTS 即拍即有水印',
-      watermarkImagePath: '',
-      logoPreviewPath: '',
+      watermarkImagePath: FALLBACK_LOGO_ASSETS[0].imagePath,
+      logoPreviewPath: FALLBACK_LOGO_ASSETS[0].imagePath,
       selectedLogoName: '企业 Logo',
       selectedLogoWidth: 72,
       selectedLogoHeight: 72,
       enablePhoto: true,
-      logoStatus: 'Preset logo will be used when available.',
+      logoStatus: 'Bundled logo ready.',
       status: 'Ready'
     }
   },
@@ -172,7 +172,7 @@ export default {
       try {
         const assets = await this.requestWatermarkLogoAssets()
         const logo = assets[0]
-        if (!logo || !logo.imageUrl) {
+        if (!logo || (!logo.imageUrl && !logo.imagePath)) {
           throw new Error('Logo API returned no image.')
         }
         await this.applyRemoteWatermarkLogo(logo)
@@ -209,20 +209,28 @@ export default {
       return list
         .map((item) => {
           const imageUrl = `${item.imageUrl || item.url || ''}`
+          const imagePath = `${item.imagePath || item.localPath || ''}`
           return {
-            id: `${item.id || imageUrl}`,
+            id: `${item.id || imageUrl || imagePath}`,
             name: `${item.name || '企业 Logo'}`,
             imageUrl,
+            imagePath,
             width: Number(item.width || 72),
             height: Number(item.height || 72)
           }
         })
-        .filter((item) => item.imageUrl.length > 0)
+        .filter((item) => item.imageUrl.length > 0 || item.imagePath.length > 0)
     },
     applyRemoteWatermarkLogo(logo) {
       this.selectedLogoName = logo.name
       this.selectedLogoWidth = logo.width || 72
       this.selectedLogoHeight = logo.height || 72
+      if (logo.imagePath) {
+        this.watermarkImagePath = logo.imagePath
+        this.logoPreviewPath = logo.imagePath
+        this.logoStatus = 'Bundled logo ready.'
+        return Promise.resolve()
+      }
 
       return new Promise((resolve, reject) => {
         uni.downloadFile({

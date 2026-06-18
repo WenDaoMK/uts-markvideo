@@ -12,6 +12,7 @@ const requiredFiles = [
   'manifest.json',
   'pages.json',
   'pages/index/index.vue',
+  'static/watermark/company-logo.svg',
   'uni_modules/uts-markvideo/package.json',
   'uni_modules/uts-markvideo/utssdk/interface.uts',
   'uni_modules/uts-markvideo/utssdk/app-android/index.uts',
@@ -378,18 +379,29 @@ test('Page resolves watermark logo assets before opening the native recorder', a
   const page = await readFile(path.join(root, 'pages/index/index.vue'), 'utf8');
   const apiDoc = await readFile(path.join(root, 'docs/api.md'), 'utf8');
   const prd = await readFile(path.join(root, 'docs/prd-watermark-camera-cross-platform.md'), 'utf8');
+  const swift = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-ios/MarkVideoRecorder.swift'),
+    'utf8',
+  );
 
   assert.match(apiDoc, /GET \/api\/watermark\/logo-assets/);
+  assert.match(apiDoc, /local image\s+path or readable URI prepared by the Page layer/);
   assert.match(apiDoc, /imageUrl: 'https:\/\/example\.com\/assets\/company-logo\.png'/);
+  assert.match(apiDoc, /\/static\/watermark\/company-logo\.svg/);
   assert.match(apiDoc, /watermark\.imagePath/);
   assert.match(prd, /GET \/api\/watermark\/logo-assets/);
+  assert.match(prd, /Android 分支的契约/);
   assert.match(prd, /logos\[\]\.imageUrl/);
+  assert.match(prd, /\/static\/watermark\/company-logo\.svg/);
   assert.match(page, /const WATERMARK_LOGO_API = ''/);
   assert.match(page, /const FALLBACK_LOGO_ASSETS = \[/);
-  assert.match(page, /imageUrl: 'https:\/\/dummyimage\.com\/240x240\/17212b\/ffffff\.png&text=LOGO'/);
+  assert.match(page, /imagePath: '\/static\/watermark\/company-logo\.svg'/);
+  assert.match(page, /watermarkImagePath: FALLBACK_LOGO_ASSETS\[0\]\.imagePath/);
   assert.match(page, /mounted\(\) \{[\s\S]*this\.loadWatermarkLogoAssets\(\)/);
   assert.match(page, /uni\.request\(\{[\s\S]*url: WATERMARK_LOGO_API/);
   assert.match(page, /normalizeLogoAssets\(res\.data\)/);
+  assert.match(page, /const imagePath = `\$\{item\.imagePath \|\| item\.localPath \|\| ''\}`/);
+  assert.match(page, /if \(logo\.imagePath\) \{[\s\S]*this\.watermarkImagePath = logo\.imagePath/);
   assert.match(page, /uni\.downloadFile\(\{[\s\S]*url: logo\.imageUrl/);
   assert.match(page, /this\.watermarkImagePath = res\.tempFilePath/);
   assert.match(page, /uni\.chooseImage\(\{[\s\S]*this\.watermarkImagePath = imagePath/);
@@ -398,6 +410,9 @@ test('Page resolves watermark logo assets before opening the native recorder', a
   assert.match(page, /imageHeight: this\.selectedLogoHeight/);
   assert.match(page, /<image[\s\S]*class="logoImage"[\s\S]*:src="logoPreviewPath"/);
   assert.match(page, /class="watermarkPreviewText"/);
+  assert.match(swift, /let bundlePath = path\.hasPrefix\("\/"\) \? String\(path\.dropFirst\(\)\) : path/);
+  assert.match(swift, /UIImage\(named: bundlePath\)/);
+  assert.match(swift, /Bundle\.main\.path\(forResource: resourceName, ofType: resourceExtension\)/);
 });
 
 test('iOS recorder shows a blinking red recording indicator and elapsed timer', async () => {
