@@ -371,14 +371,55 @@ test('iOS recorder shows a blinking red recording indicator and elapsed timer', 
     'utf8',
   );
 
+  const buildUIBody = /private func buildUI\(\) \{([\s\S]*?)\n    private func layoutWatermarkPreview/.exec(swift)?.[1] ?? '';
+  const startRecordingBody = /@objc private func startRecording\(\) \{([\s\S]*?)\n    @objc private func takePhoto/.exec(swift)?.[1] ?? '';
+  const appendSuccessBlock = /if adaptor\.append\(watermarkedBuffer, withPresentationTime: timestamp\) \{([\s\S]*?)\n        \}/.exec(swift)?.[1] ?? '';
+  const handleFinishedWritingBody = /private func handleFinishedWriting\(outputURL: URL, writer: AVAssetWriter\) \{([\s\S]*?)\n    private func finishRecordingOnWriterQueue/.exec(swift)?.[1] ?? '';
+
+  assert.match(swift, /private var recordingStatusView = UIView\(\)/);
   assert.match(swift, /private var recordingDotView = UIView\(\)/);
   assert.match(swift, /private var recordingTimeLabel = UILabel\(\)/);
   assert.match(swift, /private var recordingTimer: Timer\?/);
   assert.match(swift, /private func startRecordingIndicator\(\)/);
   assert.match(swift, /private func stopRecordingIndicator\(\)/);
+  assert.match(swift, /guard Thread\.isMainThread else \{[\s\S]*DispatchQueue\.main\.async \{[\s\S]*self\.startRecordingIndicator\(\)/);
+  assert.match(swift, /guard Thread\.isMainThread else \{[\s\S]*DispatchQueue\.main\.async \{[\s\S]*self\.stopRecordingIndicator\(\)/);
   assert.match(swift, /Timer\.scheduledTimer\(withTimeInterval: 1\.0, repeats: true/);
   assert.match(swift, /recordingTimeLabel\.text = Self\.formatRecordingTime\(elapsed: 0\)/);
   assert.match(swift, /UIView\.animate\(\s*withDuration: 0\.8,[\s\S]*recordingDotView\.alpha = 0\.25/);
+  assert.match(buildUIBody, /view\.addSubview\(recordingStatusView\)/);
+  assert.match(buildUIBody, /let recordingStatusTopAnchor: NSLayoutYAxisAnchor/);
+  assert.match(buildUIBody, /recordingStatusTopAnchor = view\.safeAreaLayoutGuide\.topAnchor/);
+  assert.match(buildUIBody, /recordingStatusTopAnchor = topLayoutGuide\.bottomAnchor/);
+  assert.match(buildUIBody, /recordingStatusView\.topAnchor\.constraint\(equalTo: recordingStatusTopAnchor/);
+  assert.doesNotMatch(buildUIBody, /controlPanel\.addArrangedSubview\(recordingIndicatorRow\)/);
+  assert.doesNotMatch(startRecordingBody, /self\.startRecordingIndicator\(\)/);
+  assert.match(appendSuccessBlock, /if firstVideoTime == nil \{[\s\S]*DispatchQueue\.main\.async \{[\s\S]*self\.startRecordingIndicator\(\)/);
+  assert.doesNotMatch(handleFinishedWritingBody, /(?<!self\.)stopRecordingIndicator\(\)/);
+});
+
+test('iOS watermark preview supports whole-block drag and pinch zoom burned into output', async () => {
+  const swift = await readFile(
+    path.join(root, 'uni_modules/uts-markvideo/utssdk/app-ios/MarkVideoRecorder.swift'),
+    'utf8',
+  );
+
+  const drawWatermarkBody = /private func drawWatermark\(into buffer: CVPixelBuffer\) \{([\s\S]*?)\n    override func viewDidDisappear/.exec(swift)?.[1] ?? '';
+
+  assert.match(swift, /UIGestureRecognizerDelegate/);
+  assert.match(swift, /private var watermarkContainer = UIView\(\)/);
+  assert.match(swift, /private let watermarkStateLock = NSLock\(\)/);
+  assert.match(swift, /private var watermarkCenterRatio = CGPoint\(x: 0\.5, y: 0\.78\)/);
+  assert.match(swift, /private var watermarkScale: CGFloat = 1/);
+  assert.match(swift, /UILongPressGestureRecognizer\(target: self, action: #selector\(handleWatermarkLongPress\(_:?\)\)\)/);
+  assert.match(swift, /UIPinchGestureRecognizer\(target: self, action: #selector\(handleWatermarkPinch\(_:?\)\)\)/);
+  assert.match(swift, /shouldRecognizeSimultaneouslyWith otherGestureRecognizer/);
+  assert.match(swift, /private func updateWatermarkLayout\(center: CGPoint, scale: CGFloat\)/);
+  assert.match(swift, /watermarkStateLock\.lock\(\)[\s\S]*watermarkCenterRatio = nextRatio[\s\S]*watermarkScale = nextScale[\s\S]*watermarkStateLock\.unlock\(\)/);
+  assert.match(drawWatermarkBody, /let state = currentWatermarkLayoutState\(\)/);
+  assert.match(drawWatermarkBody, /CGFloat\(width\) \* state\.centerRatio\.x/);
+  assert.match(drawWatermarkBody, /CGFloat\(height\) \* state\.centerRatio\.y/);
+  assert.match(drawWatermarkBody, /state\.scale/);
 });
 
 test('Vue 3 app entry is declared in manifest', async () => {

@@ -130,7 +130,7 @@ public class MarkVideoRecorder: NSObject {
     }
 }
 
-private final class MarkVideoRecorderViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
+private final class MarkVideoRecorderViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate, UIGestureRecognizerDelegate {
     private let watermark: String
     private let fps: Int
     private let preferredWidth: Int
@@ -147,11 +147,15 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
     private let ciContext = CIContext()
 
     private var previewLayer: AVCaptureVideoPreviewLayer?
+    private var watermarkContainer = UIView()
+    private var watermarkLabel = UILabel()
+    private var recordingStatusView = UIView()
     private var recordingIndicatorRow = UIStackView()
     private var recordingDotView = UIView()
     private var recordingTimeLabel = UILabel()
     private var recordingTimer: Timer?
     private var recordingStartDate: Date?
+    private var controlPanel = UIStackView()
     private var statusLabel = UILabel()
     private var startButton = UIButton(type: .system)
     private var stopButton = UIButton(type: .system)
@@ -173,8 +177,19 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
     private var videoFrameCount = 0
     private var videoSize = CGSize(width: 720, height: 1280)
     private var latestVideoPixelBuffer: CVPixelBuffer?
+    private let watermarkStateLock = NSLock()
+    private var watermarkCenterRatio = CGPoint(x: 0.5, y: 0.78)
+    private var watermarkScale: CGFloat = 1
+    private var dragStartCenterRatio = CGPoint(x: 0.5, y: 0.78)
+    private var dragStartLocation = CGPoint.zero
+    private var pinchStartScale: CGFloat = 1
     private var frameInterval: CMTime {
         CMTime(value: 1, timescale: CMTimeScale(fps))
+    }
+
+    private struct WatermarkLayoutState {
+        let centerRatio: CGPoint
+        let scale: CGFloat
     }
 
     init(
@@ -219,6 +234,7 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         previewLayer?.frame = view.bounds
+        layoutWatermarkPreview()
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -238,17 +254,30 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
     private func buildUI() {
         view.backgroundColor = .black
 
-        let watermarkLabel = UILabel()
         watermarkLabel.text = watermark
         watermarkLabel.textColor = .white
         watermarkLabel.font = .boldSystemFont(ofSize: 18)
         watermarkLabel.textAlignment = .center
-        watermarkLabel.backgroundColor = UIColor.black.withAlphaComponent(0.56)
-        watermarkLabel.layer.cornerRadius = 8
-        watermarkLabel.layer.masksToBounds = true
         watermarkLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        let controlPanel = UIStackView()
+        watermarkContainer.backgroundColor = UIColor.black.withAlphaComponent(0.56)
+        watermarkContainer.layer.cornerRadius = 12
+        watermarkContainer.layer.shadowColor = UIColor.black.cgColor
+        watermarkContainer.layer.shadowOpacity = 0.28
+        watermarkContainer.layer.shadowRadius = 10
+        watermarkContainer.layer.shadowOffset = CGSize(width: 0, height: 4)
+        watermarkContainer.translatesAutoresizingMaskIntoConstraints = true
+        watermarkContainer.addSubview(watermarkLabel)
+
+        let dragGesture = UILongPressGestureRecognizer(target: self, action: #selector(handleWatermarkLongPress(_:)))
+        dragGesture.minimumPressDuration = 0.18
+        dragGesture.delegate = self
+        watermarkContainer.addGestureRecognizer(dragGesture)
+
+        let pinchGesture = UIPinchGestureRecognizer(target: self, action: #selector(handleWatermarkPinch(_:)))
+        pinchGesture.delegate = self
+        watermarkContainer.addGestureRecognizer(pinchGesture)
+
         controlPanel.axis = .vertical
         controlPanel.alignment = .fill
         controlPanel.spacing = 12
@@ -257,10 +286,18 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
         controlPanel.layoutMargins = UIEdgeInsets(top: 12, left: 18, bottom: 18, right: 18)
         controlPanel.translatesAutoresizingMaskIntoConstraints = false
 
+        recordingStatusView.backgroundColor = UIColor.black.withAlphaComponent(0.64)
+        recordingStatusView.layer.cornerRadius = 16
+        recordingStatusView.layer.shadowColor = UIColor.black.cgColor
+        recordingStatusView.layer.shadowOpacity = 0.24
+        recordingStatusView.layer.shadowRadius = 8
+        recordingStatusView.layer.shadowOffset = CGSize(width: 0, height: 3)
+        recordingStatusView.isHidden = true
+        recordingStatusView.translatesAutoresizingMaskIntoConstraints = false
+
         recordingIndicatorRow.axis = .horizontal
         recordingIndicatorRow.alignment = .center
         recordingIndicatorRow.spacing = 8
-        recordingIndicatorRow.isHidden = true
         recordingIndicatorRow.translatesAutoresizingMaskIntoConstraints = false
 
         recordingDotView.backgroundColor = .systemRed
@@ -276,6 +313,7 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
 
         recordingIndicatorRow.addArrangedSubview(recordingDotView)
         recordingIndicatorRow.addArrangedSubview(recordingTimeLabel)
+        recordingStatusView.addSubview(recordingIndicatorRow)
 
         statusLabel.text = "Camera preview"
         statusLabel.textColor = UIColor(white: 0.92, alpha: 1)
@@ -305,28 +343,150 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
         buttonRow.spacing = 12
         buttonRow.distribution = .fillEqually
 
-        controlPanel.addArrangedSubview(recordingIndicatorRow)
         controlPanel.addArrangedSubview(statusLabel)
         controlPanel.addArrangedSubview(buttonRow)
 
-        view.addSubview(watermarkLabel)
+        view.addSubview(watermarkContainer)
+        view.addSubview(recordingStatusView)
         view.addSubview(controlPanel)
 
+        let recordingStatusTopAnchor: NSLayoutYAxisAnchor
+        if #available(iOS 11.0, *) {
+            recordingStatusTopAnchor = view.safeAreaLayoutGuide.topAnchor
+        } else {
+            recordingStatusTopAnchor = topLayoutGuide.bottomAnchor
+        }
+
         NSLayoutConstraint.activate([
-            watermarkLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 18),
-            watermarkLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -18),
-            watermarkLabel.bottomAnchor.constraint(equalTo: controlPanel.topAnchor, constant: -18),
-            watermarkLabel.heightAnchor.constraint(equalToConstant: 56),
+            watermarkLabel.leadingAnchor.constraint(equalTo: watermarkContainer.leadingAnchor, constant: 16),
+            watermarkLabel.trailingAnchor.constraint(equalTo: watermarkContainer.trailingAnchor, constant: -16),
+            watermarkLabel.topAnchor.constraint(equalTo: watermarkContainer.topAnchor, constant: 10),
+            watermarkLabel.bottomAnchor.constraint(equalTo: watermarkContainer.bottomAnchor, constant: -10),
+            recordingStatusView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            recordingStatusView.topAnchor.constraint(equalTo: recordingStatusTopAnchor, constant: 12),
+            recordingIndicatorRow.leadingAnchor.constraint(equalTo: recordingStatusView.leadingAnchor, constant: 14),
+            recordingIndicatorRow.trailingAnchor.constraint(equalTo: recordingStatusView.trailingAnchor, constant: -14),
+            recordingIndicatorRow.topAnchor.constraint(equalTo: recordingStatusView.topAnchor, constant: 8),
+            recordingIndicatorRow.bottomAnchor.constraint(equalTo: recordingStatusView.bottomAnchor, constant: -8),
             controlPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             controlPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             controlPanel.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
+        layoutWatermarkPreview()
+    }
+
+    private func layoutWatermarkPreview() {
+        guard view.bounds.width > 0 && view.bounds.height > 0 else { return }
+        let state = currentWatermarkLayoutState()
+        let size = watermarkPreviewSize(scale: state.scale)
+        let targetCenter = CGPoint(
+            x: state.centerRatio.x * view.bounds.width,
+            y: state.centerRatio.y * view.bounds.height
+        )
+        watermarkContainer.bounds = CGRect(origin: .zero, size: size)
+        watermarkContainer.center = clampedWatermarkCenter(targetCenter, size: size)
+    }
+
+    @objc private func handleWatermarkLongPress(_ gesture: UILongPressGestureRecognizer) {
+        let location = gesture.location(in: view)
+        switch gesture.state {
+        case .began:
+            let state = currentWatermarkLayoutState()
+            dragStartCenterRatio = state.centerRatio
+            dragStartLocation = location
+        case .changed:
+            let state = currentWatermarkLayoutState()
+            let nextCenter = CGPoint(
+                x: dragStartCenterRatio.x * view.bounds.width + location.x - dragStartLocation.x,
+                y: dragStartCenterRatio.y * view.bounds.height + location.y - dragStartLocation.y
+            )
+            updateWatermarkLayout(center: nextCenter, scale: state.scale)
+        default:
+            layoutWatermarkPreview()
+        }
+    }
+
+    @objc private func handleWatermarkPinch(_ gesture: UIPinchGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            pinchStartScale = currentWatermarkLayoutState().scale
+        case .changed:
+            let state = currentWatermarkLayoutState()
+            let currentCenter = CGPoint(
+                x: state.centerRatio.x * view.bounds.width,
+                y: state.centerRatio.y * view.bounds.height
+            )
+            updateWatermarkLayout(center: currentCenter, scale: pinchStartScale * gesture.scale)
+        default:
+            layoutWatermarkPreview()
+        }
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        return true
+    }
+
+    private func updateWatermarkLayout(center: CGPoint, scale: CGFloat) {
+        guard view.bounds.width > 0 && view.bounds.height > 0 else { return }
+        let nextScale = min(max(scale, 0.6), 2.2)
+        let size = watermarkPreviewSize(scale: nextScale)
+        let clampedCenter = clampedWatermarkCenter(center, size: size)
+        let nextRatio = CGPoint(
+            x: min(max(clampedCenter.x / view.bounds.width, 0), 1),
+            y: min(max(clampedCenter.y / view.bounds.height, 0), 1)
+        )
+        watermarkStateLock.lock()
+        watermarkCenterRatio = nextRatio
+        watermarkScale = nextScale
+        watermarkStateLock.unlock()
+        layoutWatermarkPreview()
+    }
+
+    private func currentWatermarkLayoutState() -> WatermarkLayoutState {
+        watermarkStateLock.lock()
+        let state = WatermarkLayoutState(centerRatio: watermarkCenterRatio, scale: watermarkScale)
+        watermarkStateLock.unlock()
+        return state
+    }
+
+    private func watermarkPreviewSize(scale: CGFloat) -> CGSize {
+        let baseWidth = min(max(220, view.bounds.width * 0.72), max(180, view.bounds.width - 36))
+        return CGSize(width: baseWidth * scale, height: 56 * scale)
+    }
+
+    private func clampedWatermarkCenter(_ center: CGPoint, size: CGSize) -> CGPoint {
+        let horizontalMargin = size.width / 2 + 18
+        let minX = min(horizontalMargin, view.bounds.midX)
+        let maxX = max(view.bounds.width - horizontalMargin, view.bounds.midX)
+        let minY = topSafeInset() + size.height / 2 + 18
+        let controlTop = controlPanel.frame.minY > 0 ? controlPanel.frame.minY : view.bounds.height
+        let maxY = max(controlTop - size.height / 2 - 18, minY)
+        return CGPoint(
+            x: min(max(center.x, minX), maxX),
+            y: min(max(center.y, minY), maxY)
+        )
+    }
+
+    private func topSafeInset() -> CGFloat {
+        if #available(iOS 11.0, *) {
+            return view.safeAreaInsets.top
+        }
+        return topLayoutGuide.length
     }
 
     private func startRecordingIndicator() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async {
+                self.startRecordingIndicator()
+            }
+            return
+        }
         recordingStartDate = Date()
         recordingTimeLabel.text = Self.formatRecordingTime(elapsed: 0)
-        recordingIndicatorRow.isHidden = false
+        recordingStatusView.isHidden = false
         recordingDotView.layer.removeAllAnimations()
         recordingDotView.alpha = 1
         recordingTimer?.invalidate()
@@ -346,16 +506,37 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
                 self.recordingDotView.alpha = 0.25
             }
         )
+        scheduleMaxDurationStopIfNeeded()
     }
 
     private func stopRecordingIndicator() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async {
+                self.stopRecordingIndicator()
+            }
+            return
+        }
         recordingTimer?.invalidate()
         recordingTimer = nil
         recordingStartDate = nil
         recordingDotView.layer.removeAllAnimations()
         recordingDotView.alpha = 1
-        recordingIndicatorRow.isHidden = true
+        recordingStatusView.isHidden = true
         recordingTimeLabel.text = Self.formatRecordingTime(elapsed: 0)
+    }
+
+    private func scheduleMaxDurationStopIfNeeded() {
+        guard maxDurationMs > 0 else { return }
+        NSObject.cancelPreviousPerformRequests(
+            withTarget: self,
+            selector: #selector(MarkVideoRecorderViewController.stopRecording),
+            object: nil
+        )
+        perform(
+            #selector(MarkVideoRecorderViewController.stopRecording),
+            with: nil,
+            afterDelay: Double(maxDurationMs) / 1000.0
+        )
     }
 
     private static func formatRecordingTime(elapsed: Int) -> String {
@@ -457,24 +638,11 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
                 self.lastEncodedFrameTime = nil
                 self.videoFrameCount = 0
                 DispatchQueue.main.async {
-                    self.startRecordingIndicator()
                     self.startButton.isEnabled = false
                     self.stopButton.isEnabled = true
                     self.photoButton.isEnabled = false
                     self.doneButton.isEnabled = false
-                    self.statusLabel.text = "Recording with burned-in watermark..."
-                    if self.maxDurationMs > 0 {
-                        NSObject.cancelPreviousPerformRequests(
-                            withTarget: self,
-                            selector: #selector(MarkVideoRecorderViewController.stopRecording),
-                            object: nil
-                        )
-                        self.perform(
-                            #selector(MarkVideoRecorderViewController.stopRecording),
-                            with: nil,
-                            afterDelay: Double(self.maxDurationMs) / 1000.0
-                        )
-                    }
+                    self.statusLabel.text = "Preparing first recorded frame..."
                 }
             } catch {
                 self.recording = false
@@ -586,9 +754,9 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
         } else {
             durationMs = 0
         }
-        stopRecordingIndicator()
         resetWriter()
         DispatchQueue.main.async {
+            self.stopRecordingIndicator()
             self.completed = true
             MarkVideoRecorder.complete(
                 path: outputURL.path,
@@ -765,6 +933,10 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
         if adaptor.append(watermarkedBuffer, withPresentationTime: timestamp) {
             if firstVideoTime == nil {
                 firstVideoTime = timestamp
+                DispatchQueue.main.async {
+                    self.startRecordingIndicator()
+                    self.statusLabel.text = "Recording with burned-in watermark..."
+                }
             }
             lastEncodedFrameTime = timestamp
             lastVideoTime = timestamp
@@ -895,12 +1067,19 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
         context.translateBy(x: 0, y: CGFloat(height))
         context.scaleBy(x: 1, y: -1)
 
-        let bandHeight = max(72, Int(Double(height) * 0.16))
+        let state = currentWatermarkLayoutState()
+        let baseBandHeight = max(72, CGFloat(height) * 0.16)
+        let bandHeight = baseBandHeight * state.scale
+        let bandWidth = CGFloat(width) * 0.88 * state.scale
+        let center = CGPoint(
+            x: CGFloat(width) * state.centerRatio.x,
+            y: CGFloat(height) * state.centerRatio.y
+        )
         let rect = CGRect(
-            x: CGFloat(width) * 0.06,
-            y: CGFloat(height - bandHeight) - CGFloat(height) * 0.04,
-            width: CGFloat(width) * 0.88,
-            height: CGFloat(bandHeight)
+            x: center.x - bandWidth / 2,
+            y: center.y - bandHeight / 2,
+            width: bandWidth,
+            height: bandHeight
         )
         context.setFillColor(UIColor.black.withAlphaComponent(0.58).cgColor)
         context.fill(rect)
@@ -909,11 +1088,11 @@ private final class MarkVideoRecorderViewController: UIViewController, AVCapture
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: UIFont.boldSystemFont(ofSize: max(22, CGFloat(width) / 22)),
+            .font: UIFont.boldSystemFont(ofSize: max(22, CGFloat(width) / 22) * state.scale),
             .foregroundColor: UIColor.white,
             .paragraphStyle: paragraph
         ]
-        let textRect = rect.insetBy(dx: 16, dy: CGFloat(bandHeight) * 0.28)
+        let textRect = rect.insetBy(dx: 16 * state.scale, dy: bandHeight * 0.28)
         (watermark as NSString).draw(in: textRect, withAttributes: attributes)
         UIGraphicsPopContext()
         context.restoreGState()
