@@ -10,6 +10,8 @@
 
 参考原型：[camera-prototype.html](../camera-prototype.html)
 
+文档关系：[api.md](api.md) 描述当前 `main` 分支已导出的 `recordWatermarkVideo` / `createWatermarkSample` MVP API；本 PRD 描述下一阶段业务页面内嵌原生相机组件的产品与跨端实现契约。两者不属于同一接口层级。实现新内嵌组件时，以本 PRD 为主；旧 API 必须保持兼容，不应被静默改成新组件接口。
+
 ## 目标
 
 - 支持把原生相机预览嵌入到业务页面的指定区域。
