@@ -41,7 +41,6 @@ export type MarkVideoVideoOptions = {
 
 export type MarkVideoCameraOptions = {
   facing?: string
-  previewFit?: string
   enablePhoto?: boolean
 }
 

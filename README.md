@@ -1,103 +1,102 @@
 # uts-markvideo
 
-Native App MVP for testing whether a uni-app UTS plugin can open a camera,
-preview a watermark, record, stop, and return an MP4 whose frames already
-contain the watermark.
+`uts-markvideo` 是一个 uni-app UTS 原生水印相机插件。当前主形态是页面内嵌组件：业务页面把相机预览放在自己的布局区域里，再用页面按钮控制录制、结束录制、拍照、切换摄像头和切换水印。
 
-## What this MVP proves
+旧的 `recordWatermarkVideo()` 独立原生录制页仍然保留，作为兼容入口。
 
-- Android App side configures watermark text and calls a UTS plugin.
-- The plugin opens a native Android camera Activity.
-- The native Activity previews camera frames with the watermark visible.
-- The Activity has start/stop recording buttons.
-- Camera frames are drawn with the watermark before being encoded by
-  `MediaCodec` + `MediaMuxer`.
-- The uni-app page receives the MP4 path and plays it for visual verification.
-- No push-stream/RTMP/WebRTC server is involved.
+## 当前能力
 
-This MVP is deliberately small: Android uses Camera2 `ImageReader` frames plus
-`AudioRecord`, and iOS uses AVFoundation video/audio outputs plus
-`AVAssetWriter`. Both paths aim to produce a local file with a burned-in
-watermark and microphone audio. It is meant to prove the product flow before
-replacing the frame path with a production OpenGL/CameraX/Metal pipeline.
+- Android 页面内嵌原生相机预览组件。
+- 页面按钮调用开始录制、结束录制、拍照、切换摄像头。
+- 宿主页面维护水印样式，组件只接收当前样式并替换显示。
+- 支持文字水印、图片水印、图文混合水印。
+- 支持水印框背景、圆角、内边距、文字颜色、文字大小、图片大小等扁平配置。
+- 支持长按拖动水印位置。
+- 视频和照片使用同一套水印绘制规则。
+- 视频和照片保存到系统相册。
+- 返回临时文件路径、相册路径和录制帧统计。
 
-## Try it
+## 组件用法
 
-1. Open this `uts-markvideo` folder in HBuilderX as a uni-app project.
-2. Run to Android App.
-3. Enter watermark text on the first page.
-4. Tap the button to open the native camera recorder.
-5. In the native page, tap start, then stop.
-6. The app should receive a local MP4 path and display it in the page video
-   player. Play the MP4 and check that the watermark is burned into the video.
+App 端页面必须使用 `nvue/uvue` 原生渲染页面承载该组件。普通 `vue` 页面会把标签当成普通 Vue 空组件，`ref` 上不会有录制方法。
 
-iOS uses the same `recordWatermarkVideo` API and opens a native AVFoundation
-recorder.
+```vue
+<uts-markvideo-camera
+  ref="camera"
+  class="cameraView"
+  :facing="facing"
+  :fps="24"
+  :bitrate="1200000"
+  :includeAudio="false"
+  @recordstop="handleRecordStop"
+  @photo="handlePhoto"
+  @error="handleError"
+/>
+```
 
-## Important paths
+组件使用者需要在页面 CSS 中指定宽高：
 
-- `docs/api.md` - public plugin API shape, compatibility rules, and planned
-  option groups.
-- `docs/roadmap.md` - Android APK test findings and optimization roadmap.
-- `pages/index/index.vue` - demo page that configures the watermark and opens
-  the recorder.
-- `uni_modules/uts-markvideo/utssdk/interface.uts` - public plugin contract.
-- `uni_modules/uts-markvideo/utssdk/app-android/index.uts` - UTS Android bridge.
-- `uni_modules/uts-markvideo/utssdk/app-android/MarkVideoNative.kt` - UTS hybrid
-  callback bridge and generated-frame encoder sample.
-- `uni_modules/uts-markvideo/utssdk/app-android/MarkVideoCameraActivity.kt` -
-  native Android camera preview, microphone capture, and record/stop MVP.
-- `uni_modules/uts-markvideo/utssdk/app-ios/MarkVideoRecorder.swift` - native
-  iOS AVFoundation camera, audio, watermark, and writer MVP.
+```css
+.cameraView {
+  width: 100%;
+  height: 520px;
+}
+```
 
-## Next step for real camera
+页面通过 `ref` 调用：
 
-For production, replace the CPU bitmap conversion in
-`MarkVideoCameraActivity.kt` with an OpenGL or CameraX effect pipeline, replace
-the iOS CoreGraphics watermark pass with Metal/CoreImage tuning as needed, and
-add deeper device/orientation testing.
+```js
+this.$refs.camera.setWatermarkStyleFlat(
+  style.text,
+  style.imagePath,
+  style.x,
+  style.y,
+  style.textColor,
+  style.fontSize,
+  style.textBold,
+  style.imageWidth,
+  style.imageHeight,
+  style.imageGap,
+  style.boxWidth,
+  style.boxHeight,
+  style.backgroundColor,
+  style.borderRadius,
+  style.padding
+)
+this.$refs.camera.startRecord({ fps: 24, bitrate: 1200000, includeAudio: false })
+this.$refs.camera.stopRecord()
+this.$refs.camera.takePhoto()
+this.$refs.camera.switchCamera()
+```
 
-## GitHub Actions packaging
+完整契约见 [docs/api.md](docs/api.md)。
 
-`.github/workflows/cloud-package.yml` adds a manual GitHub Actions workflow that
-uses the official HBuilderX Linux CLI cloud packaging command:
+## 重要路径
 
-1. Download HBuilderX Linux CLI.
-2. Run `cli open`.
-3. Log in with DCloud.
-4. Import this project.
-5. Generate a temporary `cli pack --config` JSON file.
-6. Upload generated APK/AAB/IPA/WGT artifacts from `unpackage/`.
+- `docs/prd-embedded-camera-component.md`：页面内嵌相机组件 PRD。
+- `docs/api.md`：公开 API 和事件契约。
+- `pages/index/index.nvue`：App 端内嵌组件真机示例页。
+- `pages/index/index.vue`：非 App 端/兼容兜底页面。
+- `uni_modules/uts-markvideo/utssdk/interface.uts`：旧函数 API 类型定义。
+- `uni_modules/uts-markvideo/utssdk/app-android/index.vue`：Android UTS 组件入口。
+- `uni_modules/uts-markvideo/utssdk/app-android/MarkVideoEmbeddedCameraView.kt`：Android 内嵌相机组件实现。
+- `uni_modules/uts-markvideo/utssdk/app-android/index.uts`：旧 `recordWatermarkVideo()` Android 桥接。
+- `uni_modules/uts-markvideo/utssdk/app-android/MarkVideoCameraActivity.kt`：旧独立原生录制页，作为兼容路径和迁移参考保留。
+- `uni_modules/uts-markvideo/utssdk/app-ios/MarkVideoRecorder.swift`：iOS 旧录制实现。
 
-Before running it, configure repository variables:
+## 运行
 
-- `ANDROID_PACKAGE_NAME`, for example `com.example.utsmarkvideo`
-- `IOS_BUNDLE_ID`, for example `com.example.utsmarkvideo`
-- `ANDROID_CERT_ALIAS`, only when using your own Android keystore
-- `IOS_SUPPORTED_DEVICE`, optional, defaults to `iPhone`
-- `IOS_CHANNELS`, optional, defaults to `phone`
-- `HBUILDERX_URL`, optional, defaults to the current official Linux CLI release
+1. 用 HBuilderX 打开本目录。
+2. 运行到 Android App 真机。
+3. 授权相机权限，如需录音再授权麦克风权限。
+4. 在首页预览区域确认相机画面，选择水印样式，长按拖动水印。
+5. 点击页面按钮开始录制、结束录制或拍照。
+6. 在页面结果区查看视频预览和系统相册路径。
 
-Configure repository secrets:
+## 测试
 
-- `DCLOUD_USERNAME`
-- `DCLOUD_PASSWORD`
-- `ANDROID_CERT_BASE64`, only when `android_pack_type` is `0`
-- `ANDROID_CERT_PASSWORD`, only when `android_pack_type` is `0`
-- `ANDROID_STORE_PASSWORD`, only when `android_pack_type` is `0`
-- `IOS_PROFILE_BASE64`, only when `ios_prisonbreak` is `false`
-- `IOS_CERT_BASE64`, only when `ios_prisonbreak` is `false`
-- `IOS_CERT_PASSWORD`, only when `ios_prisonbreak` is `false`
+```sh
+npm test
+```
 
-Encode certificate files with `base64 -w 0 <file>` before saving them as
-GitHub secrets. The workflow defaults to safe packaging and Android DCloud cloud
-certificate mode (`android_pack_type=3`), so you can start with Android once
-DCloud cloud certificate configuration exists for this app.
-
-For iOS device smoke testing with AltStore-style self-signing tools, run the
-workflow with `platform=ios` and keep `ios_prisonbreak=true`. In that mode the
-generated pack config requests a DCloud iOS prisonbreak package and does not
-require `IOS_PROFILE_BASE64`, `IOS_CERT_BASE64`, or `IOS_CERT_PASSWORD`. Use the
-downloaded IPA as the input to your own signing/install tool. Turn
-`ios_prisonbreak` off only when you want DCloud to sign the IPA with Apple
-certificate files stored in GitHub Secrets.
+自动化测试主要锁定文件结构、公开契约和关键实现文本。相机权限、预览、录制帧率、相册可见性仍需要 Android 真机验证。
