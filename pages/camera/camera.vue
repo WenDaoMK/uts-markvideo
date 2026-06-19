@@ -91,9 +91,13 @@
 </template>
 
 <script>
+import UtsMarkvideoCamera from '@/uni_modules/uts-markvideo/utssdk/app-ios/index.vue'
 import { createCameraService, DEFAULT_WATERMARK_TEMPLATES } from '../index/cameraService'
 
 export default {
+  components: {
+    UtsMarkvideoCamera
+  },
   data() {
     return {
       service: null,

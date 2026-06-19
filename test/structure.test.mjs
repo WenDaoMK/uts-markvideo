@@ -87,6 +87,8 @@ test('business camera page embeds the native camera component and owns camera co
 
   assert.match(pagesJson, /pages\/camera\/camera/);
   assert.match(cameraPage, /<uts-markvideo-camera/);
+  assert.match(cameraPage, /import UtsMarkvideoCamera from ['"]@\/uni_modules\/uts-markvideo\/utssdk\/app-ios\/index\.vue['"]/);
+  assert.match(cameraPage, /components:\s*\{\s*UtsMarkvideoCamera\s*\}/);
   assert.match(cameraPage, /ref="embeddedCamera"/);
   assert.match(cameraPage, /createCameraService/);
   assert.match(cameraPage, /uni\.getStorageSync\('embedded-camera-payload'\)/);
