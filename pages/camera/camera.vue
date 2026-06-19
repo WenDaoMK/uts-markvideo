@@ -69,18 +69,18 @@
       <text class="statusText">{{ status }}</text>
     </view>
 
-    <cover-view v-if="templateSheetOpen" class="sheetMask" @tap="closeTemplateSheet">
-      <cover-view class="templateSheet" @tap.stop>
+    <cover-view v-show="templateSheetOpen" class="sheetMask">
+      <cover-view class="templateSheet">
         <cover-view class="sheetHeader">
           <cover-view class="sheetTitle">选择水印模板</cover-view>
-          <cover-view class="sheetClose" @tap.stop="closeTemplateSheet">关闭</cover-view>
+          <cover-view class="sheetClose" @tap="closeTemplateSheet">关闭</cover-view>
         </cover-view>
         <cover-view
           v-for="template in templates"
           :key="template.templateId"
           class="templateOption"
           :class="{ isSelected: currentTemplate.templateId === template.templateId }"
-          @tap.stop="applyTemplate(template)"
+          @tap="applyTemplate(template)"
         >
           <cover-view class="optionTitle">{{ template.templateName }}</cover-view>
           <cover-view class="optionText">{{ template.mainTitleText }}</cover-view>
@@ -261,11 +261,20 @@ export default {
       return false
     },
     async applyTemplate(template) {
-      const result = await this.service.setWatermark(template)
-      if (result.success) {
-        this.currentTemplate = template
-        this.templateSheetOpen = false
+      const previousTemplate = this.currentTemplate
+      this.currentTemplate = template
+      this.templateSheetOpen = false
+      if (!this.cameraReady) {
         this.status = '水印模板已更新'
+        return
+      }
+      const result = await this.service.setWatermark(template)
+      this.status = result.success
+        ? '水印模板已更新'
+        : `${result.errorCode}: ${result.errorMessage}`
+      if (!result.success) {
+        this.currentTemplate = previousTemplate
+        return
       }
     },
     async toggleFlash() {
@@ -553,28 +562,31 @@ export default {
 }
 
 .sheetHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  position: relative;
+  min-height: 44px;
   margin-bottom: 12px;
 }
 
 .sheetTitle {
+  padding-right: 88px;
   font-size: 17px;
   font-weight: 700;
+  line-height: 44px;
 }
 
 .sheetClose {
-  min-width: 56px;
+  position: absolute;
+  right: 0;
+  top: 5px;
+  width: 68px;
   height: 34px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  box-sizing: border-box;
   border-radius: 17px;
   background: #e9f0ed;
   color: #16211d;
   font-size: 13px;
+  line-height: 34px;
+  text-align: center;
 }
 
 .templateOption {
