@@ -6,6 +6,18 @@ import assert from 'node:assert/strict';
 
 const root = path.resolve(import.meta.dirname, '..');
 
+function extractTypeBlock(text, typeName) {
+  const match = text.match(new RegExp(`export type ${typeName} = \\{([\\s\\S]*?)\\n\\}`));
+  assert.ok(match, `Missing type block: ${typeName}`);
+  return match[1];
+}
+
+function extractMethodBlock(text, methodName) {
+  const match = text.match(new RegExp(`${methodName}\\([^)]*\\)(?:: [^{]+)? \\{([\\s\\S]*?)\\n    \\}`));
+  assert.ok(match, `Missing method block: ${methodName}`);
+  return match[1];
+}
+
 const requiredFiles = [
   'README.md',
   'docs/api.md',
@@ -90,6 +102,7 @@ test('business camera page embeds the native camera component and owns camera co
   assert.match(cameraPage, /import UtsMarkvideoCamera from ['"]@\/uni_modules\/uts-markvideo\/utssdk\/app-ios\/index\.vue['"]/);
   assert.match(cameraPage, /components:\s*\{\s*UtsMarkvideoCamera\s*\}/);
   assert.match(cameraPage, /ref="embeddedCamera"/);
+  assert.match(cameraPage, /@nativeviewready="handleNativeViewReady"/);
   assert.match(cameraPage, /createCameraService/);
   assert.match(cameraPage, /uni\.getStorageSync\('embedded-camera-payload'\)/);
   assert.match(cameraPage, /resolveNativeCamera\(\)/);
@@ -97,6 +110,8 @@ test('business camera page embeds the native camera component and owns camera co
   assert.match(cameraPage, /const nativeCamera = await this\.waitForNativeCamera\(\)/);
   assert.match(cameraPage, /nativeCamera,/);
   assert.match(cameraPage, /typeof nativeCamera\.mountCamera === 'function'/);
+  assert.match(cameraPage, /typeof nativeCamera\.isNativeViewLoaded === 'function'/);
+  assert.match(cameraPage, /nativeCamera\.isNativeViewLoaded\(\)/);
   assert.doesNotMatch(cameraPage, /uni\.getElementById\('embeddedCamera'\)/);
   assert.doesNotMatch(cameraPage, /typeof nativeCamera\.setWatermark === 'function'[\s\S]*typeof nativeCamera\.setZoom === 'function'/);
   assert.match(cameraPage, /const mountResult = await this\.service\.mountCamera/);
@@ -104,7 +119,15 @@ test('business camera page embeds the native camera component and owns camera co
   assert.match(cameraPage, /await this\.wait\(160\)/);
   assert.match(cameraPage, /continue/);
   assert.match(cameraPage, /cameraReady: false/);
+  assert.match(cameraPage, /nativeViewReady: false/);
+  assert.match(cameraPage, /mountingCamera: false/);
+  assert.match(cameraPage, /cameraDestroyed: false/);
   assert.match(cameraPage, /this\.cameraReady = true/);
+  assert.match(cameraPage, /if \(this\.mountingCamera \|\| this\.cameraReady \|\| this\.cameraDestroyed\) \{[\s\S]*return/);
+  assert.match(cameraPage, /this\.mountingCamera = true[\s\S]*finally \{[\s\S]*this\.mountingCamera = false/);
+  assert.match(cameraPage, /handleNativeViewReady\(\) \{[\s\S]*this\.nativeViewReady = true[\s\S]*if \(!this\.cameraReady && !this\.mountingCamera && !this\.cameraDestroyed\)/);
+  assert.match(cameraPage, /this\.\$nextTick\(\(\) => \{[\s\S]*this\.bootstrapCamera\(\)/);
+  assert.match(cameraPage, /beforeUnmount\(\) \{[\s\S]*this\.cameraDestroyed = true/);
   assert.match(cameraPage, /ensureCameraReady\(\) \{[\s\S]*if \(this\.cameraReady\) \{[\s\S]*return true[\s\S]*if \(!\/\^\\d\{4\}:\//);
   assert.match(cameraPage, /this\.status = '相机未就绪，请稍候'/);
   assert.match(cameraPage, /if \(!this\.ensureCameraReady\(\)\) \{[\s\S]*return[\s\S]*await this\.service\.takePhoto/);
@@ -118,15 +141,14 @@ test('business camera page embeds the native camera component and owns camera co
   assert.match(cameraPage, /pressShutter/);
   assert.match(cameraPage, /templateSheetOpen/);
   assert.match(cameraPage, /@tap="openTemplateSheet"/);
+  assert.match(cameraPage, /scrollToTemplatePanel\(\)/);
+  assert.match(cameraPage, /selector: '\.templatePanel'/);
   assert.match(cameraPage, /@tap="applyTemplate\(template\)"/);
-  assert.match(cameraPage, /<cover-view[\s\S]*class="zoomRail"/);
-  assert.match(cameraPage, /<cover-view v-show="templateSheetOpen" class="sheetMask"/);
-  assert.doesNotMatch(cameraPage, /class="sheetMask" @tap="closeTemplateSheet"/);
-  assert.doesNotMatch(cameraPage, /<cover-view class="templateSheet" @tap\.stop/);
-  assert.doesNotMatch(cameraPage, /class="sheetClose" @tap\.stop/);
-  assert.doesNotMatch(cameraPage, /@tap\.stop="applyTemplate\(template\)"/);
-  assert.doesNotMatch(cameraPage, /<view class="zoomRail"/);
-  assert.doesNotMatch(cameraPage, /<view v-show="templateSheetOpen" class="sheetMask"/);
+  assert.doesNotMatch(cameraPage, /<cover-view/);
+  assert.doesNotMatch(cameraPage, /class="sheetMask"/);
+  assert.doesNotMatch(cameraPage, /position: fixed/);
+  assert.match(cameraPage, /class="zoomRail"/);
+  assert.match(cameraPage, /class="templatePanel"/);
   assert.match(cameraPage, /视频/);
   assert.match(cameraPage, /照片/);
   assert.match(cameraPage, /广角/);
@@ -134,8 +156,6 @@ test('business camera page embeds the native camera component and owns camera co
   assert.match(cameraPage, /\.flashButton \{[\s\S]*border: 1px solid[\s\S]*border-radius: 19px/);
   assert.match(cameraPage, /\.zoomButton \{[\s\S]*width: 54px[\s\S]*height: 54px[\s\S]*border-radius: 50%/);
   assert.match(cameraPage, /\.templateButton \{[\s\S]*width: 54px[\s\S]*height: 54px[\s\S]*border-radius: 50%/);
-  assert.match(cameraPage, /\.sheetHeader \{[\s\S]*position: relative[\s\S]*min-height: 44px/);
-  assert.match(cameraPage, /\.sheetClose \{[\s\S]*position: absolute[\s\S]*right: 0[\s\S]*width: 68px[\s\S]*line-height: 34px/);
   assert.match(cameraPage, /const previousTemplate = this\.currentTemplate[\s\S]*this\.currentTemplate = template/);
   assert.match(cameraPage, /this\.currentTemplate = template[\s\S]*this\.templateSheetOpen = false[\s\S]*if \(!this\.cameraReady\)/);
   assert.match(cameraPage, /const result = await this\.service\.setWatermark\(template\)/);
@@ -329,9 +349,24 @@ test('UTS interface exposes the PRD facade contract and keeps legacy recorder ty
     'utf8',
   );
 
+  const markVideoFail = extractTypeBlock(interfaceText, 'MarkVideoFail');
+  const frameStats = extractTypeBlock(interfaceText, 'MarkVideoFrameStats');
+  const recordSuccess = extractTypeBlock(interfaceText, 'RecordWatermarkVideoSuccess');
+  const sampleOptions = extractTypeBlock(interfaceText, 'CreateWatermarkSampleOptions');
+
   assert.match(interfaceText, /EmbeddedCameraResult/);
   assert.match(interfaceText, /EmbeddedCameraMountOptions/);
   assert.match(interfaceText, /WatermarkTemplate/);
+  assert.match(interfaceText, /MarkVideoErrorCode/);
+  assert.ok(interfaceText.indexOf('export type MarkVideoFrameStats') < interfaceText.indexOf('export type RecordWatermarkVideoSuccess'));
+  assert.match(markVideoFail, /errCode: MarkVideoErrorCode/);
+  for (const statField of ['received', 'droppedBusy', 'droppedFps', 'processed', 'encoded']) {
+    assert.match(frameStats, new RegExp(`${statField}: number`));
+  }
+  assert.match(recordSuccess, /stats\?: MarkVideoFrameStats/);
+  assert.match(recordSuccess, /kind\?: string/);
+  assert.match(sampleOptions, /watermark\?: MarkVideoWatermarkOptions/);
+  assert.match(sampleOptions, /video\?: MarkVideoVideoOptions/);
   assert.match(interfaceText, /MountCamera/);
   assert.match(interfaceText, /SetWatermark/);
   assert.match(interfaceText, /ClearWatermark/);
@@ -378,11 +413,16 @@ test('iOS native component entry owns the PRD method surface', async () => {
     path.join(root, 'uni_modules/uts-markvideo/utssdk/app-ios/index.vue'),
     'utf8',
   );
+  const isNativeViewLoaded = extractMethodBlock(component, 'isNativeViewLoaded');
 
   assert.match(component, /name: 'uts-markvideo-camera'/);
   assert.match(component, /NVLoad\(\): UIView/);
   assert.match(component, /MarkVideoEmbeddedCameraView/);
   assert.match(component, /view\.setEventHandlers/);
+  assert.match(component, /'nativeviewready'/);
+  assert.match(component, /this\.\$emit\('nativeviewready'/);
+  assert.match(component, /nativeViewLoaded: false/);
+  assert.match(component, /this\.nativeViewLoaded = true[\s\S]*this\.\$emit\('nativeviewready'/);
   for (const eventName of [
     'photodone',
     'recordstart',
@@ -395,6 +435,7 @@ test('iOS native component entry owns the PRD method surface', async () => {
     assert.match(component, new RegExp(`'${eventName}'`));
   }
   assert.match(component, /expose: \[/);
+  assert.match(component, /'isNativeViewLoaded'/);
   for (const method of [
     'mountCamera',
     'setWatermark',
@@ -420,7 +461,11 @@ test('iOS native component entry owns the PRD method surface', async () => {
   assert.match(component, /return text!/);
   assert.match(component, /this\.\$emit\('watermarkpositionchange', parsePayload\(payload\)\)/);
   assert.match(component, /this\.\$emit\('nativeerror'/);
-  assert.match(component, /if \(this\.\$el != null\) \{[\s\S]*this\.nativeView = this\.\$el as MarkVideoEmbeddedCameraView[\s\S]*return this\.nativeView/);
+  assert.match(component, /resolveNativeView\(\): MarkVideoEmbeddedCameraView \| null/);
+  assert.match(isNativeViewLoaded, /return this\.nativeViewLoaded == true && this\.nativeView != null/);
+  assert.match(component, /const view = this\.resolveNativeView\(\)/);
+  assert.doesNotMatch(isNativeViewLoaded, /resolveNativeView\(\)/);
+  assert.match(component, /destroyCamera\(\): EmbeddedCameraResult \{[\s\S]*const view = this\.resolveNativeView\(\)[\s\S]*if \(view == null\)/);
   assert.match(component, /view!\.mountCamera/);
   assert.match(component, /view!\.takePhoto\(stringify\(options\)\)/);
   assert.match(component, /view!\.startRecord\(stringify\(options\)\)/);

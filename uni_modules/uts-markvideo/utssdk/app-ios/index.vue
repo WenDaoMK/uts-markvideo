@@ -176,7 +176,8 @@ export default {
     'flashchange',
     'zoomchange',
     'camerafacingchange',
-    'cameraready'
+    'cameraready',
+    'nativeviewready'
   ],
   expose: [
     'mountCamera',
@@ -189,7 +190,8 @@ export default {
     'switchFlash',
     'setZoom',
     'switchCamera',
-    'destroyCamera'
+    'destroyCamera',
+    'isNativeViewLoaded'
   ],
   props: {
     templateId: {
@@ -197,20 +199,21 @@ export default {
       default: ''
     }
   },
-  data() {
-    return {
-      ready: false,
-      recording: false,
-      zoom: '1x',
-      flashEnabled: false,
-      cameraFacing: 'back',
-      currentTemplate: null as WatermarkTemplate | null,
-      frozenTemplate: null as WatermarkTemplate | null,
-      previewWidth: 0,
-      previewHeight: 0,
-      nativeView: null as MarkVideoEmbeddedCameraView | null
-    }
-  },
+      data() {
+        return {
+          ready: false,
+          recording: false,
+          zoom: '1x',
+          flashEnabled: false,
+          cameraFacing: 'back',
+          currentTemplate: null as WatermarkTemplate | null,
+          frozenTemplate: null as WatermarkTemplate | null,
+          previewWidth: 0,
+          previewHeight: 0,
+          nativeView: null as MarkVideoEmbeddedCameraView | null,
+          nativeViewLoaded: false
+        }
+      },
   NVLoad(): UIView {
     const view = new MarkVideoEmbeddedCameraView()
     view.setEventHandlers(
@@ -222,16 +225,26 @@ export default {
       }
     )
     this.nativeView = view
+    this.nativeViewLoaded = true
+    setTimeout(() => {
+      this.$emit('nativeviewready', emptyPayload())
+    }, 0)
     return view
   },
   methods: {
-    requireNativeView(): MarkVideoEmbeddedCameraView | null {
+    resolveNativeView(): MarkVideoEmbeddedCameraView | null {
       if (this.nativeView != null) {
         return this.nativeView
       }
-      if (this.$el != null) {
-        this.nativeView = this.$el as MarkVideoEmbeddedCameraView
-        return this.nativeView
+      return null
+    },
+    isNativeViewLoaded(): boolean {
+      return this.nativeViewLoaded == true && this.nativeView != null
+    },
+    requireNativeView(): MarkVideoEmbeddedCameraView | null {
+      const view = this.resolveNativeView()
+      if (view != null) {
+        return view
       }
       const result = nativeViewUnavailable()
       this.$emit('nativeerror', errorPayload(result))
@@ -446,12 +459,13 @@ export default {
       return result
     },
     destroyCamera(): EmbeddedCameraResult {
-      const view = this.requireNativeView()
+      const view = this.resolveNativeView()
       if (view == null) {
         this.ready = false
         this.recording = false
         this.currentTemplate = null
         this.frozenTemplate = null
+        this.nativeViewLoaded = false
         return ok({})
       }
       const result = parseResult(view!.destroyCamera())
@@ -460,6 +474,8 @@ export default {
       this.recording = false
       this.currentTemplate = null
       this.frozenTemplate = null
+      this.nativeViewLoaded = false
+      this.nativeView = null
       return result.success ? ok({}) : result
     }
   }

@@ -5,8 +5,10 @@ export type CreateWatermarkSampleSuccess = {
   height: number
 }
 
+export type MarkVideoErrorCode = number
+
 export type MarkVideoFail = {
-  errCode: number
+  errCode: MarkVideoErrorCode
   errMsg: string
 }
 
@@ -58,62 +60,6 @@ export type EmbeddedCameraMediaOptions = {
   watermarkTemplate?: WatermarkTemplate
 }
 
-export type RecordWatermarkVideoSuccess = {
-  kind?: 'recording' | 'photo'
-  tempFilePath: string
-  savedFilePath?: string
-  photoTempFilePaths?: string[]
-  photoSavedFilePaths?: string[]
-  durationMs: number
-  width: number
-  height: number
-  watermarkText: string
-}
-
-export type RecordWatermarkVideoOptions = {
-  watermark?: MarkVideoWatermarkOptions
-  video?: MarkVideoVideoOptions
-  camera?: MarkVideoCameraOptions
-  limits?: MarkVideoRecordLimits
-  diagnostics?: MarkVideoDiagnosticsOptions
-  text?: string
-  fps?: number
-  success?: (res: RecordWatermarkVideoSuccess) => void
-  fail?: (err: MarkVideoFail) => void
-  complete?: (res: any) => void
-}
-
-export type RecordWatermarkVideo = (
-  options: RecordWatermarkVideoOptions
-) => void
-
-export type CreateWatermarkSampleOptions = {
-  text?: string
-  durationMs?: number
-  width?: number
-  height?: number
-  fps?: number
-  success?: (res: CreateWatermarkSampleSuccess) => void
-  fail?: (err: MarkVideoFail) => void
-  complete?: (res: any) => void
-}
-
-export type CreateWatermarkSample = (
-  options: CreateWatermarkSampleOptions
-) => void
-
-export type MountCamera = (options: EmbeddedCameraMountOptions) => EmbeddedCameraResult
-export type SetWatermark = (template: WatermarkTemplate) => EmbeddedCameraResult
-export type ClearWatermark = () => EmbeddedCameraResult
-export type GetWatermarkPosition = () => EmbeddedCameraResult
-export type TakePhoto = (options: EmbeddedCameraMediaOptions) => EmbeddedCameraResult
-export type StartRecord = (options?: EmbeddedCameraMediaOptions) => EmbeddedCameraResult
-export type StopRecord = () => EmbeddedCameraResult
-export type SwitchFlash = (enabled: boolean) => EmbeddedCameraResult
-export type SetZoom = (zoom: string) => EmbeddedCameraResult
-export type SwitchCamera = (cameraFacing: string) => EmbeddedCameraResult
-export type DestroyCamera = () => EmbeddedCameraResult
-
 export type MarkVideoWatermarkOptions = {
   text?: string
   imagePath?: string
@@ -155,3 +101,70 @@ export type MarkVideoRecordLimits = {
 export type MarkVideoDiagnosticsOptions = {
   perfLogging?: boolean
 }
+
+export type MarkVideoFrameStats = {
+  received: number
+  droppedBusy: number
+  droppedFps: number
+  processed: number
+  encoded: number
+}
+
+export type RecordWatermarkVideoSuccess = {
+  kind?: string
+  tempFilePath: string
+  savedFilePath?: string
+  photoTempFilePaths?: string[]
+  photoSavedFilePaths?: string[]
+  durationMs: number
+  width: number
+  height: number
+  watermarkText: string
+  stats?: MarkVideoFrameStats
+}
+
+export type RecordWatermarkVideoOptions = {
+  watermark?: MarkVideoWatermarkOptions
+  video?: MarkVideoVideoOptions
+  camera?: MarkVideoCameraOptions
+  limits?: MarkVideoRecordLimits
+  diagnostics?: MarkVideoDiagnosticsOptions
+  text?: string
+  fps?: number
+  success?: (res: RecordWatermarkVideoSuccess) => void
+  fail?: (err: MarkVideoFail) => void
+  complete?: (res: any) => void
+}
+
+export type RecordWatermarkVideo = (
+  options: RecordWatermarkVideoOptions
+) => void
+
+export type CreateWatermarkSampleOptions = {
+  watermark?: MarkVideoWatermarkOptions
+  video?: MarkVideoVideoOptions
+  text?: string
+  durationMs?: number
+  width?: number
+  height?: number
+  fps?: number
+  success?: (res: CreateWatermarkSampleSuccess) => void
+  fail?: (err: MarkVideoFail) => void
+  complete?: (res: any) => void
+}
+
+export type CreateWatermarkSample = (
+  options: CreateWatermarkSampleOptions
+) => void
+
+export type MountCamera = (options: EmbeddedCameraMountOptions) => EmbeddedCameraResult
+export type SetWatermark = (template: WatermarkTemplate) => EmbeddedCameraResult
+export type ClearWatermark = () => EmbeddedCameraResult
+export type GetWatermarkPosition = () => EmbeddedCameraResult
+export type TakePhoto = (options: EmbeddedCameraMediaOptions) => EmbeddedCameraResult
+export type StartRecord = (options?: EmbeddedCameraMediaOptions) => EmbeddedCameraResult
+export type StopRecord = () => EmbeddedCameraResult
+export type SwitchFlash = (enabled: boolean) => EmbeddedCameraResult
+export type SetZoom = (zoom: string) => EmbeddedCameraResult
+export type SwitchCamera = (cameraFacing: string) => EmbeddedCameraResult
+export type DestroyCamera = () => EmbeddedCameraResult
