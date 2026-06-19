@@ -229,6 +229,10 @@ export default {
       if (this.nativeView != null) {
         return this.nativeView
       }
+      if (this.$el != null) {
+        this.nativeView = this.$el as MarkVideoEmbeddedCameraView
+        return this.nativeView
+      }
       const result = nativeViewUnavailable()
       this.$emit('nativeerror', errorPayload(result))
       return null

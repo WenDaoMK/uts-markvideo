@@ -5,9 +5,9 @@
         <text class="summaryLabel">当前模板</text>
         <text class="summaryTitle">{{ currentTemplate.templateName }}</text>
       </view>
-      <button class="flashButton" :class="{ isActive: flashEnabled }" @click="toggleFlash">
-        {{ flashEnabled ? '闪光开' : '闪光关' }}
-      </button>
+      <view class="flashButton" :class="{ isActive: flashEnabled }" @tap="toggleFlash">
+        <text class="flashText">{{ flashEnabled ? '闪光开' : '闪光关' }}</text>
+      </view>
     </view>
 
     <view class="cameraStage">
@@ -21,68 +21,72 @@
       />
 
       <view class="zoomRail">
-        <button
+        <view
           v-for="item in zoomOptions"
           :key="item.value"
           class="zoomButton"
           :class="{ isSelected: zoom === item.value }"
-          @click="selectZoom(item.value)"
+          @tap="selectZoom(item.value)"
         >
-          {{ item.label }}
-        </button>
+          <text class="zoomText">{{ item.label }}</text>
+        </view>
       </view>
     </view>
 
     <view class="bottomPanel">
       <view class="modeTabs">
-        <button
+        <view
           class="modeButton"
           :class="{ isSelected: mode === 'video' }"
-          @click="mode = 'video'"
+          @tap="mode = 'video'"
         >
-          视频
-        </button>
-        <button
+          <text>视频</text>
+        </view>
+        <view
           class="modeButton"
           :class="{ isSelected: mode === 'photo' }"
-          @click="mode = 'photo'"
+          @tap="mode = 'photo'"
         >
-          照片
-        </button>
+          <text>照片</text>
+        </view>
       </view>
 
       <view class="controls">
         <view class="thumb">
           <text class="thumbText">{{ lastResultLabel }}</text>
         </view>
-        <button
+        <view
           class="shutter"
           :class="shutterClass"
-          @click="pressShutter"
+          @tap="pressShutter"
         >
           <view class="shutterCore"></view>
-        </button>
-        <button class="templateButton" @click="templateSheetOpen = true">印</button>
+        </view>
+        <view class="templateButton" @tap="openTemplateSheet">
+          <text class="templateButtonText">印</text>
+        </view>
       </view>
       <text class="statusText">{{ status }}</text>
     </view>
 
-    <view v-if="templateSheetOpen" class="sheetMask" @click="templateSheetOpen = false">
-      <view class="templateSheet" @click.stop>
+    <view v-if="templateSheetOpen" class="sheetMask" @tap="closeTemplateSheet">
+      <view class="templateSheet" @tap.stop>
         <view class="sheetHeader">
           <text class="sheetTitle">选择水印模板</text>
-          <button class="sheetClose" @click="templateSheetOpen = false">关闭</button>
+          <view class="sheetClose" @tap.stop="closeTemplateSheet">
+            <text>关闭</text>
+          </view>
         </view>
-        <button
+        <view
           v-for="template in templates"
           :key="template.templateId"
           class="templateOption"
           :class="{ isSelected: currentTemplate.templateId === template.templateId }"
-          @click="applyTemplate(template)"
+          @tap.stop="applyTemplate(template)"
         >
           <text class="optionTitle">{{ template.templateName }}</text>
           <text class="optionText">{{ template.mainTitleText }}</text>
-        </button>
+        </view>
       </view>
     </view>
   </view>
@@ -155,15 +159,22 @@ export default {
         this.status = `${payload.errorCode}: ${payload.errorMessage}`
       }
     })
-    this.bootstrapCamera()
+    this.$nextTick(() => {
+      this.bootstrapCamera()
+    })
   },
   beforeUnmount() {
     this.service?.destroyCamera()
   },
   methods: {
     async bootstrapCamera() {
+      const nativeCamera = await this.waitForNativeCamera()
+      if (!nativeCamera) {
+        this.status = '9001: 原生相机组件不可用'
+        return
+      }
       await this.service.mountCamera({
-        nativeCamera: this.$refs.embeddedCamera,
+        nativeCamera,
         containerId: 'embeddedCamera',
         previewWidth: 390,
         previewHeight: 560,
@@ -172,6 +183,32 @@ export default {
         flashEnabled: false
       })
       await this.service.setWatermark(this.currentTemplate)
+    },
+    waitForNativeCamera() {
+      const maxAttempts = 12
+      let attempts = 0
+      return new Promise((resolve) => {
+        const poll = () => {
+          const nativeCamera = this.$refs.embeddedCamera
+          if (nativeCamera && typeof nativeCamera.mountCamera === 'function') {
+            resolve(nativeCamera)
+            return
+          }
+          attempts += 1
+          if (attempts >= maxAttempts) {
+            resolve(null)
+            return
+          }
+          setTimeout(poll, 50)
+        }
+        poll()
+      })
+    },
+    openTemplateSheet() {
+      this.templateSheetOpen = true
+    },
+    closeTemplateSheet() {
+      this.templateSheetOpen = false
     },
     async applyTemplate(template) {
       const result = await this.service.setWatermark(template)
@@ -256,26 +293,26 @@ export default {
   line-height: 24px;
 }
 
-.flashButton,
-.modeButton,
-.zoomButton,
-.templateButton,
-.sheetClose,
-.templateOption {
-  margin: 0;
-  border-radius: 8px;
-}
-
 .flashButton {
-  min-width: 78px;
-  min-height: 40px;
-  padding: 0 12px;
+  width: 86px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border: 1px solid rgba(22, 33, 29, 0.24);
+  border-radius: 19px;
   background: #e9f0ed;
   color: #16211d;
+}
+
+.flashText {
   font-size: 13px;
+  line-height: 18px;
 }
 
 .flashButton.isActive {
+  border-color: #126fdb;
   background: #126fdb;
   color: #ffffff;
 }
@@ -304,14 +341,25 @@ export default {
 }
 
 .zoomButton {
-  width: 52px;
-  min-height: 40px;
+  width: 54px;
+  height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border: 1px solid rgba(247, 250, 248, 0.26);
+  border-radius: 50%;
   background: rgba(12, 18, 16, 0.64);
   color: #f7faf8;
+}
+
+.zoomText {
   font-size: 13px;
+  line-height: 18px;
 }
 
 .zoomButton.isSelected {
+  border-color: #f7faf8;
   background: #f7faf8;
   color: #101715;
 }
@@ -329,7 +377,10 @@ export default {
 
 .modeButton {
   min-width: 58px;
-  background: transparent;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: #9ca8a2;
   font-size: 15px;
 }
@@ -367,6 +418,7 @@ export default {
   display: grid;
   place-items: center;
   padding: 0;
+  box-sizing: border-box;
   border: 3px solid rgba(255, 255, 255, 0.86);
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.14);
@@ -393,10 +445,20 @@ export default {
 .templateButton {
   width: 54px;
   height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border: 1px solid rgba(247, 250, 248, 0.18);
+  border-radius: 50%;
   background: #f7faf8;
   color: #101715;
+}
+
+.templateButtonText {
   font-size: 24px;
   font-weight: 900;
+  line-height: 30px;
 }
 
 .statusText {
@@ -439,6 +501,12 @@ export default {
 }
 
 .sheetClose {
+  min-width: 56px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 17px;
   background: #e9f0ed;
   color: #16211d;
   font-size: 13px;
@@ -450,6 +518,9 @@ export default {
   gap: 3px;
   margin-top: 10px;
   padding: 12px;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: 8px;
   background: #f5f8f6;
   color: #16211d;
   text-align: left;

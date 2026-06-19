@@ -90,7 +90,9 @@ test('business camera page embeds the native camera component and owns camera co
   assert.match(cameraPage, /ref="embeddedCamera"/);
   assert.match(cameraPage, /createCameraService/);
   assert.match(cameraPage, /uni\.getStorageSync\('embedded-camera-payload'\)/);
-  assert.match(cameraPage, /nativeCamera: this\.\$refs\.embeddedCamera/);
+  assert.match(cameraPage, /const nativeCamera = await this\.waitForNativeCamera\(\)/);
+  assert.match(cameraPage, /nativeCamera,/);
+  assert.match(cameraPage, /typeof nativeCamera\.mountCamera === 'function'/);
   assert.match(cameraPage, /onCameraReady/);
   assert.match(cameraPage, /onPhotoDone/);
   assert.match(cameraPage, /onRecordStart/);
@@ -100,10 +102,19 @@ test('business camera page embeds the native camera component and owns camera co
   assert.match(cameraPage, /selectZoom/);
   assert.match(cameraPage, /pressShutter/);
   assert.match(cameraPage, /templateSheetOpen/);
+  assert.match(cameraPage, /@tap="openTemplateSheet"/);
+  assert.match(cameraPage, /@tap\.stop="applyTemplate\(template\)"/);
   assert.match(cameraPage, /视频/);
   assert.match(cameraPage, /照片/);
   assert.match(cameraPage, /广角/);
   assert.match(cameraPage, /class="templateButton"/);
+  assert.match(cameraPage, /\.flashButton \{[\s\S]*border: 1px solid[\s\S]*border-radius: 19px/);
+  assert.match(cameraPage, /\.zoomButton \{[\s\S]*width: 54px[\s\S]*height: 54px[\s\S]*border-radius: 50%/);
+  assert.match(cameraPage, /\.templateButton \{[\s\S]*width: 54px[\s\S]*height: 54px[\s\S]*border-radius: 50%/);
+  assert.doesNotMatch(cameraPage, /<button[^>]*class="flashButton"/);
+  assert.doesNotMatch(cameraPage, /<button[^>]*class="zoomButton"/);
+  assert.doesNotMatch(cameraPage, /<button[^>]*class="templateButton"/);
+  assert.doesNotMatch(cameraPage, /@click="applyTemplate\(template\)"/);
   assert.match(cameraPage, /isRecording/);
   assert.match(cameraPage, /var\(--status-bar-height\)/);
   assert.doesNotMatch(cameraPage, /class="watermarkBox"/);
@@ -378,6 +389,7 @@ test('iOS native component entry owns the PRD method surface', async () => {
   assert.match(component, /return text!/);
   assert.match(component, /this\.\$emit\('watermarkpositionchange', parsePayload\(payload\)\)/);
   assert.match(component, /this\.\$emit\('nativeerror'/);
+  assert.match(component, /if \(this\.\$el != null\) \{[\s\S]*this\.nativeView = this\.\$el as MarkVideoEmbeddedCameraView[\s\S]*return this\.nativeView/);
   assert.match(component, /view!\.mountCamera/);
   assert.match(component, /view!\.takePhoto\(stringify\(options\)\)/);
   assert.match(component, /view!\.startRecord\(stringify\(options\)\)/);
