@@ -119,29 +119,49 @@ function parseResult(text: string): EmbeddedCameraResult {
   }
 }
 
-function parsePayload(text: string): any {
+function emptyPayload(): Map<string, any> {
+  return new Map<string, any>()
+}
+
+function parsePayload(text: string): Map<string, any> {
   try {
-    const payload = JSON.parse(text)
-    return payload == null ? {} : payload
+    const payload = JSON.parse(text) as UTSJSONObject
+    if (payload == null) {
+      return emptyPayload()
+    }
+    return payload.toMap()
   } catch (_error) {
-    return {}
+    return emptyPayload()
   }
 }
 
 function stringify(value: any): string {
   const text = JSON.stringify(value == null ? {} : value)
-  return text != null ? text : '{}'
+  if (text == null) {
+    return '{}'
+  }
+  return text!
 }
 
-function optionNumber(value: number | null, fallback: number): number {
-  return value == null ? fallback : value
+function errorPayload(result: EmbeddedCameraResult): Map<string, any> {
+  const payload = new Map<string, any>()
+  payload.set('errorCode', result.errorCode)
+  payload.set('errorMessage', result.errorMessage)
+  payload.set('nativeMessage', result.nativeMessage)
+  return payload
 }
 
-function optionZoom(value: string | null): string {
-  return value == 'wide' || value == '2x' ? value : '1x'
+function optionZoom(value: string): string {
+  if (value == 'wide') {
+    return 'wide'
+  }
+  if (value == '2x') {
+    return '2x'
+  }
+  return '1x'
 }
 
-function optionFacing(value: string | null): string {
+function optionFacing(value: string): string {
   return value == 'front' ? 'front' : 'back'
 }
 
@@ -210,20 +230,12 @@ export default {
         return this.nativeView
       }
       const result = nativeViewUnavailable()
-      this.$emit('nativeerror', {
-        errorCode: result.errorCode,
-        errorMessage: result.errorMessage,
-        nativeMessage: result.nativeMessage
-      })
+      this.$emit('nativeerror', errorPayload(result))
       return null
     },
     emitIfFailed(result: EmbeddedCameraResult) {
       if (!result.success) {
-        this.$emit('nativeerror', {
-          errorCode: result.errorCode,
-          errorMessage: result.errorMessage,
-          nativeMessage: result.nativeMessage
-        })
+        this.$emit('nativeerror', errorPayload(result))
       }
     },
     mountCamera(options: EmbeddedCameraMountOptions): EmbeddedCameraResult {
@@ -231,10 +243,12 @@ export default {
       if (view == null) {
         return nativeViewUnavailable()
       }
-      const nextZoom = optionZoom(options.zoom)
-      const nextFacing = optionFacing(options.cameraFacing)
-      const nextPreviewWidth = optionNumber(options.previewWidth, 0)
-      const nextPreviewHeight = optionNumber(options.previewHeight, 0)
+      const requestedZoom = options.zoom
+      const requestedFacing = options.cameraFacing
+      const nextZoom = requestedZoom == null ? '1x' : optionZoom(requestedZoom)
+      const nextFacing = requestedFacing == null ? 'back' : optionFacing(requestedFacing)
+      const nextPreviewWidth = options.previewWidth == null ? 0 : options.previewWidth
+      const nextPreviewHeight = options.previewHeight == null ? 0 : options.previewHeight
       const result = parseResult(view!.mountCamera(
         nextPreviewWidth,
         nextPreviewHeight,

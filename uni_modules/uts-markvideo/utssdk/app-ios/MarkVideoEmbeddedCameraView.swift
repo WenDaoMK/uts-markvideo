@@ -767,7 +767,7 @@ public final class MarkVideoEmbeddedCameraView: UIView, AVCaptureVideoDataOutput
 
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         let videoSettings: [String: Any] = [
-            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoCodecKey: AVVideoCodecH264,
             AVVideoWidthKey: Int(videoSize.width),
             AVVideoHeightKey: Int(videoSize.height)
         ]

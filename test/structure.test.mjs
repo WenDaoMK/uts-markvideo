@@ -369,6 +369,13 @@ test('iOS native component entry owns the PRD method surface', async () => {
     assert.match(component, new RegExp(`${method}`));
   }
   assert.match(component, /type EmbeddedCameraMountOptions/);
+  assert.match(component, /function parsePayload\(text: string\): Map<string, any>/);
+  assert.match(component, /JSON\.parse\(text\) as UTSJSONObject/);
+  assert.match(component, /payload\.toMap\(\)/);
+  assert.match(component, /function errorPayload\(result: EmbeddedCameraResult\): Map<string, any>/);
+  assert.match(component, /new Map<string, any>\(\)/);
+  assert.match(component, /payload\.set\('errorCode', result\.errorCode\)/);
+  assert.match(component, /return text!/);
   assert.match(component, /this\.\$emit\('watermarkpositionchange', parsePayload\(payload\)\)/);
   assert.match(component, /this\.\$emit\('nativeerror'/);
   assert.match(component, /view!\.mountCamera/);
@@ -378,6 +385,9 @@ test('iOS native component entry owns the PRD method surface', async () => {
   assert.match(component, /if \(!result\.success\) \{[\s\S]*result\.errorCode == '1402'[\s\S]*this\.recording = false[\s\S]*this\.frozenTemplate = null[\s\S]*return result/);
   assert.doesNotMatch(component, /__\$\$emit/);
   assert.doesNotMatch(component, /JSON\.parse\(JSON\.stringify/);
+  assert.doesNotMatch(component, /return text != null \? text : '\{\}'/);
+  assert.doesNotMatch(component, /return value == 'wide' \|\| value == '2x' \? value : '1x'/);
+  assert.doesNotMatch(component, /this\.\$emit\('nativeerror', \{\s*errorCode:/);
   assert.doesNotMatch(component, /result\.data\./);
   assert.doesNotMatch(component, /Embedded iOS camera media pipeline is not bound/);
   assert.doesNotMatch(component, /recordWatermarkVideo/);
@@ -416,6 +426,8 @@ test('iOS embedded native view implements PRD preview, media, watermark, and eve
   assert.match(nativeView, /return fail\("1002"/);
   assert.match(nativeView, /return fail\("1403"/);
   assert.match(nativeView, /EmbeddedWatermarkTemplate\.parse/);
+  assert.match(nativeView, /AVVideoCodecKey: AVVideoCodecH264/);
+  assert.doesNotMatch(nativeView, /AVVideoCodecType\.h264/);
   assert.doesNotMatch(nativeView, /openCameraRecorder/);
 });
 
