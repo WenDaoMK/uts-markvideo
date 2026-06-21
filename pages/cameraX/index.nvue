@@ -4,46 +4,28 @@
       ref="nativeCamera"
       class="nativePreview"
       :mode="mode"
+      :target-fps="targetFps"
       :status-text="nativeStatus"
       @nativeviewready="handleNativeReady"
-      @shuttertap="handleNativeShutter"
+      @cameraready="handleCameraReady"
+      @nativeerror="handleNativeError"
+      @photodone="handlePhotoDone"
+      @recordstart="handleRecordStart"
+      @recorddone="handleRecordDone"
       @modechange="handleNativeMode"
-      @tooltap="handleNativeTool"
+      @shuttertap="handleNativeShutter"
     />
 
     <cover-view class="topBar">
       <cover-view class="backButton" @click="goBack">‹</cover-view>
-      <cover-view class="topPill">
-        <cover-view class="topTitle">{{ currentTemplate.templateName }}</cover-view>
-        <cover-view class="topSub">当前水印模板</cover-view>
+      <cover-view class="topTitleBox">
+        <cover-view class="topTitle">{{ mode === 'video' ? '视频' : '照片' }}</cover-view>
+        <cover-view class="topSub">{{ nativeStatus }}</cover-view>
       </cover-view>
-      <cover-view class="flashButton" @click="toggleFlash">闪光灯 {{ flashEnabled ? '开' : '关' }}</cover-view>
+      <cover-view class="fpsPill">{{ targetFps }}fps</cover-view>
     </cover-view>
 
     <cover-view class="recordPill" v-if="isRecording">REC</cover-view>
-
-    <cover-view class="watermarkFrame" v-if="watermarkVisible">
-      <cover-view class="deleteWatermark" @click="clearWatermark">×</cover-view>
-      <cover-view class="watermarkPreview">
-        <cover-view v-if="currentTemplate.templateType === 'image_title_subtitle'" class="watermarkImage"></cover-view>
-        <cover-view class="watermarkCopy">
-          <cover-view class="watermarkTitle">{{ currentTemplate.mainTitleText }}</cover-view>
-          <cover-view class="watermarkSub">{{ currentTemplate.subtitleText || '' }}</cover-view>
-        </cover-view>
-      </cover-view>
-    </cover-view>
-
-    <cover-view class="zoomRail">
-      <cover-view
-        v-for="zoom in zooms"
-        :key="zoom"
-        class="zoomButton"
-        :class="{ zoomSelected: currentZoom === zoom }"
-        @click="selectZoom(zoom)"
-      >
-        {{ zoom }}
-      </cover-view>
-    </cover-view>
 
     <cover-view class="bottomPanel">
       <cover-view class="modeSwitch">
@@ -52,39 +34,22 @@
       </cover-view>
 
       <cover-view class="mainControls">
-        <cover-view class="albumButton" @click="toggleResultStrip"></cover-view>
+        <cover-view class="resultButton" @click="toggleResultStrip">
+          <cover-view class="resultThumb"></cover-view>
+        </cover-view>
         <cover-view class="shutter" :class="{ shutterVideo: mode === 'video' }" @click="pressShutter">
           <cover-view
             class="shutterCore"
             :class="{ shutterCoreVideo: mode === 'video', shutterCoreRecording: isRecording }"
           ></cover-view>
         </cover-view>
-        <cover-view class="templateButton" @click="openTemplateSheet">印</cover-view>
+        <cover-view class="cameraButton" @click="restartCamera">↻</cover-view>
       </cover-view>
 
       <cover-view class="resultStrip" v-if="resultStripOpen">
-        <cover-view class="resultItem"></cover-view>
-        <cover-view class="resultItem"></cover-view>
-        <cover-view class="resultItem"></cover-view>
-      </cover-view>
-    </cover-view>
-
-    <cover-view class="sheetMask" v-if="templateSheetOpen" @click="closeTemplateSheet">
-      <cover-view class="templatePanel" @click.stop>
-        <cover-view class="sheetTitle">选择水印模板</cover-view>
-        <cover-view
-          v-for="template in templates"
-          :key="template.templateId"
-          class="templateOption"
-          :class="{ templateSelected: template.templateId === selectedTemplateId }"
-          @click="selectTemplate(template)"
-        >
-          <cover-view class="templatePreviewImage" v-if="template.templateType === 'image_title_subtitle'"></cover-view>
-          <cover-view class="templateTextBlock">
-            <cover-view class="optionTitle">{{ template.mainTitleText }}</cover-view>
-            <cover-view class="optionSubtext">{{ template.subtitleText || template.templateName }}</cover-view>
-          </cover-view>
-          <cover-view class="optionCheck">{{ template.templateId === selectedTemplateId ? '✓' : '' }}</cover-view>
+        <cover-view class="resultLine">
+          <cover-view class="resultLabel">最新文件</cover-view>
+          <cover-view class="resultText">{{ lastResultText }}</cover-view>
         </cover-view>
       </cover-view>
     </cover-view>
@@ -92,82 +57,21 @@
 </template>
 
 <script>
-const FALLBACK_TEMPLATES = [
-  {
-    templateId: 'title-only',
-    templateName: '纯主标题',
-    templateType: 'title_text',
-    mainTitleText: '今日水印相机',
-    subtitleText: ''
-  },
-  {
-    templateId: 'title-subtitle',
-    templateName: '主副标题',
-    templateType: 'title_subtitle_text',
-    mainTitleText: '门店巡检',
-    subtitleText: '照片和录像共用同一套水印'
-  },
-  {
-    templateId: 'png-title-subtitle',
-    templateName: 'PNG 图文',
-    templateType: 'image_title_subtitle',
-    mainTitleText: '交付留档',
-    subtitleText: 'PNG 图片 + 主副标题'
-  }
-]
-
 export default {
   data() {
     return {
-      templates: FALLBACK_TEMPLATES.map((template) => ({ ...template })),
-      selectedTemplateId: FALLBACK_TEMPLATES[0].templateId,
       mode: 'photo',
-      nativeStatus: '等待原生相机组件',
+      targetFps: 30,
+      nativeStatus: '相机初始化中',
       nativeReady: false,
       isRecording: false,
-      flashEnabled: false,
-      watermarkVisible: true,
-      templateSheetOpen: false,
       resultStripOpen: false,
-      currentZoom: '1x',
-      zooms: ['2x', '1x', '广角']
-    }
-  },
-  computed: {
-    currentTemplate() {
-      return this.templates.find((template) => template.templateId === this.selectedTemplateId) || this.templates[0]
-    }
-  },
-  onLoad() {
-    const payload = uni.getStorageSync('xyc-camera-payload')
-    if (payload && Array.isArray(payload.templates) && payload.templates.length > 0) {
-      this.templates = payload.templates
-      this.selectedTemplateId = payload.selectedTemplateId || payload.templates[0].templateId
+      lastResultText: '暂无'
     }
   },
   methods: {
     resolveNativeCamera() {
       return this.$refs.nativeCamera || null
-    },
-    handleNativeReady() {
-      this.nativeReady = true
-      this.nativeStatus = '相机已准备'
-    },
-    handleNativeShutter(event) {
-      const detail = this.eventDetail(event)
-      this.nativeStatus = detail.errorMessage || '原生组件已响应快门'
-    },
-    handleNativeMode(event) {
-      const detail = this.eventDetail(event)
-      if (detail.mode) {
-        this.mode = detail.mode
-      }
-    },
-    handleNativeTool() {
-      this.nativeStatus = '工具按钮已触发'
-    },
-    goBack() {
-      uni.navigateBack()
     },
     eventDetail(event) {
       if (event && event.detail) {
@@ -185,14 +89,65 @@ export default {
       return {
         success: false,
         errorCode: '9001',
-        errorMessage: fallbackMessage || '原生相机能力待接入'
+        errorMessage: fallbackMessage || '原生相机未返回有效结果',
+        data: {}
       }
     },
-    setMode(mode) {
-      this.mode = mode
-      if (mode === 'photo') {
-        this.isRecording = false
+    handleNativeReady() {
+      this.nativeReady = true
+      this.nativeStatus = '相机组件已加载'
+    },
+    handleCameraReady(event) {
+      const detail = this.eventDetail(event)
+      this.nativeStatus = detail.message || '相机已准备'
+    },
+    handleNativeError(event) {
+      const detail = this.eventDetail(event)
+      this.nativeStatus = detail.errorMessage || '相机错误'
+    },
+    handleNativeShutter(event) {
+      const detail = this.eventDetail(event)
+      if (detail.errorMessage) {
+        this.nativeStatus = detail.errorMessage
       }
+    },
+    handleNativeMode(event) {
+      const detail = this.eventDetail(event)
+      if (detail.mode) {
+        this.mode = detail.mode
+      }
+    },
+    handlePhotoDone(event) {
+      const detail = this.eventDetail(event)
+      this.nativeStatus = '拍照完成'
+      this.lastResultText = detail.tempFilePath || detail.path || '照片已生成'
+      this.resultStripOpen = true
+    },
+    handleRecordStart(event) {
+      const detail = this.eventDetail(event)
+      this.isRecording = true
+      this.nativeStatus = detail.message || '录像中'
+    },
+    handleRecordDone(event) {
+      const detail = this.eventDetail(event)
+      this.isRecording = false
+      this.nativeStatus = '录像完成'
+      this.lastResultText = detail.tempFilePath || detail.path || '视频已生成'
+      this.resultStripOpen = true
+    },
+    goBack() {
+      if (this.isRecording) {
+        this.nativeStatus = '请先停止录像'
+        return
+      }
+      uni.navigateBack()
+    },
+    setMode(mode) {
+      if (this.isRecording) {
+        this.nativeStatus = '录像中不能切换模式'
+        return
+      }
+      this.mode = mode
       const nativeCamera = this.resolveNativeCamera()
       if (nativeCamera && typeof nativeCamera.switchMode === 'function') {
         nativeCamera.switchMode(mode)
@@ -200,74 +155,64 @@ export default {
     },
     async pressShutter() {
       const nativeCamera = this.resolveNativeCamera()
+      if (!nativeCamera) {
+        this.nativeStatus = '原生相机组件不可用'
+        return
+      }
+
       if (this.mode === 'photo') {
-        if (!nativeCamera || typeof nativeCamera.takePhoto !== 'function') {
-          this.nativeStatus = '拍照能力待接入'
+        if (typeof nativeCamera.takePhoto !== 'function') {
+          this.nativeStatus = '拍照接口不可用'
           return
         }
-        const result = this.normalizeNativeResult(
-          await nativeCamera.takePhoto(),
-          '拍照能力待接入'
-        )
+        const result = this.normalizeNativeResult(await nativeCamera.takePhoto(), '拍照失败')
         if (result.success) {
-          this.nativeStatus = '拍照完成，已叠加当前水印'
+          this.nativeStatus = result.data && result.data.message ? result.data.message : '拍照中'
         } else {
-          this.nativeStatus = result.errorMessage || '拍照能力待接入'
+          this.nativeStatus = result.errorMessage || '拍照失败'
         }
         return
       }
 
-      if (!nativeCamera) {
-        this.nativeStatus = '录像能力待接入'
-        return
-      }
-      if (!this.isRecording && typeof nativeCamera.startRecord === 'function') {
-        const result = this.normalizeNativeResult(
-          await nativeCamera.startRecord(),
-          '录像能力待接入'
-        )
+      if (!this.isRecording) {
+        if (typeof nativeCamera.startRecord !== 'function') {
+          this.nativeStatus = '录像接口不可用'
+          return
+        }
+        const result = this.normalizeNativeResult(await nativeCamera.startRecord({ fps: this.targetFps }), '录像开始失败')
         if (result.success) {
           this.isRecording = true
-          this.nativeStatus = '录像中，当前水印已锁定'
+          this.nativeStatus = '录像中'
         } else {
-          this.nativeStatus = result.errorMessage || '录像能力待接入'
+          this.nativeStatus = result.errorMessage || '录像开始失败'
         }
-      } else if (this.isRecording && typeof nativeCamera.stopRecord === 'function') {
-        const result = this.normalizeNativeResult(
-          await nativeCamera.stopRecord(),
-          '停止录像能力待接入'
-        )
-        if (result.success) {
-          this.isRecording = false
-          this.nativeStatus = '录像完成，已叠加当前水印'
-        } else {
-          this.nativeStatus = result.errorMessage || '停止录像能力待接入'
-        }
+        return
+      }
+
+      if (typeof nativeCamera.stopRecord !== 'function') {
+        this.nativeStatus = '停止录像接口不可用'
+        return
+      }
+      const result = this.normalizeNativeResult(await nativeCamera.stopRecord(), '录像停止失败')
+      if (result.success) {
+        this.isRecording = false
+        this.nativeStatus = '录像完成'
+        this.lastResultText = result.data && result.data.tempFilePath ? result.data.tempFilePath : '视频已生成'
+        this.resultStripOpen = true
       } else {
-        this.nativeStatus = '录像能力待接入'
+        this.nativeStatus = result.errorMessage || '录像停止失败'
       }
     },
-    toggleFlash() {
-      this.nativeStatus = '闪光灯原生能力待接入'
-    },
-    selectZoom(zoom) {
-      this.nativeStatus = `焦段 ${zoom} 原生能力待接入`
-    },
-    clearWatermark() {
-      this.watermarkVisible = false
-      this.nativeStatus = '已清除当前水印预览'
-    },
-    openTemplateSheet() {
-      this.templateSheetOpen = true
-    },
-    closeTemplateSheet() {
-      this.templateSheetOpen = false
-    },
-    selectTemplate(template) {
-      this.selectedTemplateId = template.templateId
-      this.watermarkVisible = true
-      this.templateSheetOpen = false
-      this.nativeStatus = `已切换 UI 水印模板：${template.templateName}`
+    restartCamera() {
+      if (this.isRecording) {
+        this.nativeStatus = '录像中不能重启相机'
+        return
+      }
+      const nativeCamera = this.resolveNativeCamera()
+      if (nativeCamera && typeof nativeCamera.restartCamera === 'function') {
+        const result = this.normalizeNativeResult(nativeCamera.restartCamera(), '相机重启失败')
+        this.nativeStatus = result.success ? '相机已重启' : (result.errorMessage || '相机重启失败')
+      }
     },
     toggleResultStrip() {
       this.resultStripOpen = !this.resultStripOpen
@@ -295,64 +240,62 @@ export default {
   left: 0;
   right: 0;
   top: 0;
-  height: 88px;
-  padding-top: 28px;
+  height: 90px;
+  padding-top: 30px;
   padding-left: 14px;
   padding-right: 14px;
   flex-direction: row;
   align-items: center;
-  background-color: rgba(0, 0, 0, 0.28);
+  background-color: rgba(0, 0, 0, 0.26);
 }
 
 .backButton {
-  width: 36px;
-  height: 36px;
-  border-radius: 18px;
+  width: 38px;
+  height: 38px;
+  border-radius: 19px;
   color: #ffffff;
-  background-color: rgba(0, 0, 0, 0.36);
+  background-color: rgba(0, 0, 0, 0.42);
   text-align: center;
-  font-size: 28px;
-  line-height: 34px;
+  font-size: 29px;
+  line-height: 36px;
 }
 
-.topPill {
+.topTitleBox {
   flex: 1;
-  height: 44px;
   margin-left: 12px;
   margin-right: 12px;
-  border-radius: 22px;
-  background-color: rgba(0, 0, 0, 0.36);
-  align-items: center;
-  justify-content: center;
 }
 
 .topTitle {
   color: #ffffff;
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 23px;
 }
 
 .topSub {
-  margin-top: 2px;
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 10px;
+  margin-top: 3px;
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 11px;
+  line-height: 16px;
+  lines: 1;
 }
 
-.flashButton {
-  width: 82px;
-  height: 34px;
-  border-radius: 17px;
-  background-color: rgba(0, 0, 0, 0.36);
+.fpsPill {
+  width: 62px;
+  height: 32px;
+  border-radius: 16px;
+  background-color: rgba(0, 0, 0, 0.42);
   color: #ffffff;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 800;
   text-align: center;
-  line-height: 34px;
+  line-height: 32px;
 }
 
 .recordPill {
   position: absolute;
-  top: 98px;
+  top: 104px;
   right: 14px;
   width: 58px;
   height: 28px;
@@ -365,101 +308,12 @@ export default {
   line-height: 28px;
 }
 
-.watermarkFrame {
-  position: absolute;
-  left: 58px;
-  right: 58px;
-  top: 174px;
-  height: 92px;
-  border-width: 2px;
-  border-style: dashed;
-  border-color: rgba(255, 255, 255, 0.82);
-  background-color: rgba(255, 255, 255, 0.08);
-  align-items: center;
-  justify-content: center;
-  padding: 12px;
-}
-
-.deleteWatermark {
-  position: absolute;
-  top: -16px;
-  right: -16px;
-  width: 31px;
-  height: 31px;
-  border-radius: 16px;
-  background-color: #171717;
-  color: #ffffff;
-  font-size: 22px;
-  text-align: center;
-  line-height: 29px;
-}
-
-.watermarkPreview {
-  flex-direction: row;
-  align-items: center;
-  justify-content: center;
-  padding: 10px 12px;
-  border-radius: 7px;
-  background-color: rgba(255, 255, 255, 0.78);
-}
-
-.watermarkImage {
-  width: 42px;
-  height: 42px;
-  margin-right: 8px;
-  border-radius: 7px;
-  background-color: #4d7a39;
-}
-
-.watermarkCopy {
-  align-items: center;
-}
-
-.watermarkTitle {
-  color: #26313b;
-  font-size: 15px;
-  font-weight: 800;
-  lines: 1;
-}
-
-.watermarkSub {
-  margin-top: 5px;
-  color: #56616d;
-  font-size: 12px;
-  lines: 1;
-}
-
-.zoomRail {
-  position: absolute;
-  right: 14px;
-  top: 242px;
-  width: 46px;
-}
-
-.zoomButton {
-  width: 42px;
-  height: 42px;
-  margin-bottom: 10px;
-  border-radius: 21px;
-  background-color: rgba(0, 0, 0, 0.34);
-  color: #ffffff;
-  font-size: 12px;
-  font-weight: 900;
-  text-align: center;
-  line-height: 42px;
-}
-
-.zoomSelected {
-  background-color: rgba(255, 255, 255, 0.88);
-  color: #111820;
-}
-
 .bottomPanel {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
-  height: 182px;
+  height: 176px;
   padding: 12px 22px 18px;
   background-color: #050706;
 }
@@ -491,23 +345,29 @@ export default {
   justify-content: space-between;
 }
 
-.albumButton,
-.templateButton {
+.resultButton,
+.cameraButton {
   width: 58px;
   height: 58px;
   border-radius: 29px;
   background-color: rgba(255, 255, 255, 0.14);
+  align-items: center;
+  justify-content: center;
 }
 
-.albumButton {
+.resultThumb {
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
   border-width: 2px;
   border-style: solid;
   border-color: #dce4eb;
+  background-color: #26352f;
 }
 
-.templateButton {
+.cameraButton {
   color: #ffffff;
-  font-size: 28px;
+  font-size: 27px;
   font-weight: 900;
   text-align: center;
   line-height: 58px;
@@ -548,90 +408,30 @@ export default {
 }
 
 .resultStrip {
-  margin-top: 12px;
-  flex-direction: row;
-  justify-content: space-between;
-}
-
-.resultItem {
-  width: 30%;
-  height: 58px;
+  margin-top: 10px;
+  height: 38px;
   border-radius: 8px;
-  background-color: #26352f;
+  background-color: #12211b;
+  justify-content: center;
 }
 
-.sheetMask {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  justify-content: flex-end;
-  background-color: rgba(13, 20, 28, 0.38);
-}
-
-.templatePanel {
-  margin-left: 18px;
-  margin-right: 18px;
-  margin-bottom: 18px;
-  padding: 16px;
-  border-radius: 16px;
-  background-color: #ffffff;
-}
-
-.sheetTitle {
-  margin-bottom: 12px;
-  color: #17212b;
-  font-size: 18px;
-  font-weight: 800;
-}
-
-.templateOption {
-  height: 66px;
-  margin-bottom: 10px;
-  padding: 10px;
-  border-width: 1px;
-  border-style: solid;
-  border-color: #dce4eb;
-  border-radius: 8px;
+.resultLine {
+  padding-left: 12px;
+  padding-right: 12px;
   flex-direction: row;
   align-items: center;
 }
 
-.templateSelected {
-  border-color: #126fdb;
-  background-color: #e8f2ff;
+.resultLabel {
+  width: 58px;
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 11px;
 }
 
-.templatePreviewImage {
-  width: 42px;
-  height: 42px;
-  margin-right: 10px;
-  border-radius: 7px;
-  background-color: #4d7a39;
-}
-
-.templateTextBlock {
+.resultText {
   flex: 1;
-}
-
-.optionTitle {
-  color: #26313b;
-  font-size: 14px;
-  font-weight: 800;
-}
-
-.optionSubtext {
-  margin-top: 5px;
-  color: #687789;
-  font-size: 12px;
-}
-
-.optionCheck {
-  width: 24px;
-  color: #126fdb;
-  font-size: 18px;
-  font-weight: 900;
-  text-align: center;
+  color: #ffffff;
+  font-size: 11px;
+  lines: 1;
 }
 </style>

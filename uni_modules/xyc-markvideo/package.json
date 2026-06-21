@@ -3,12 +3,11 @@
 	"name": "xyc-markvideo",
 	"displayName": "xyc-markvideo",
 	"version": "0.1.0",
-	"description": "XYC native watermark camera UI component for uni-app x.",
+	"description": "XYC native camera UI component for uni-app x.",
 	"keywords": [
         "xyc-markvideo",
         "uts",
         "camera",
-        "watermark",
         "android"
     ],
 	"repository": "",
@@ -31,9 +30,9 @@
 			"qq": ""
 		},
 		"declaration": {
-			"ads": "",
-			"data": "",
-			"permissions": ""
+			"ads": "无",
+			"data": "插件不采集任何数据",
+			"permissions": "Android 使用相机和麦克风权限，用于原生预览、拍照和 30fps 录像。"
 		},
 		"npmurl": "",
 		"darkmode": "-",

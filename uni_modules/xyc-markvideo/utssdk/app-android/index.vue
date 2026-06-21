@@ -3,25 +3,37 @@
 </template>
 
 <script lang="uts">
-  import Color from 'android.graphics.Color';
-  import Typeface from 'android.graphics.Typeface';
-  import GradientDrawable from 'android.graphics.drawable.GradientDrawable';
-  import Context from 'android.content.Context';
-  import Gravity from 'android.view.Gravity';
-  import View from 'android.view.View';
-  import ViewGroup from 'android.view.ViewGroup';
   import FrameLayout from 'android.widget.FrameLayout';
-  import TextView from 'android.widget.TextView';
+  import { XycNativeCameraView } from 'uts.xyc.markvideo.android';
 
-  let density = 1.0.toFloat();
+  type NativeCameraResult = {
+    success: boolean;
+    errorCode: string;
+    errorMessage: string;
+    nativeMessage: string;
+    data: any;
+  };
 
   export default {
     name: 'xyc-markvideo',
-    emits: ['nativeviewready', 'shuttertap', 'modechange', 'tooltap'],
+    emits: [
+      'nativeviewready',
+      'cameraready',
+      'nativeerror',
+      'photodone',
+      'recordstart',
+      'recorddone',
+      'shuttertap',
+      'modechange'
+    ],
     props: {
       mode: {
         type: String,
-        default: 'video'
+        default: 'photo'
+      },
+      targetFps: {
+        type: Number,
+        default: 30
       },
       statusText: {
         type: String,
@@ -30,9 +42,8 @@
     },
     data() {
       return {
-        rootView: null as FrameLayout | null,
-        statusView: null as TextView | null,
-        currentMode: 'video'
+        cameraView: null as XycNativeCameraView | null,
+        cameraViewLoaded: false
       }
     },
     watch: {
@@ -43,116 +54,187 @@
           }
         },
         immediate: false
+      },
+      mode: {
+        handler(newValue : string, oldValue : string) {
+          if (newValue != oldValue) {
+            this.switchMode(newValue);
+          }
+        },
+        immediate: false
+      },
+      targetFps: {
+        handler(newValue : number, oldValue : number) {
+          if (newValue != oldValue && this.cameraView != null) {
+            this.cameraView!.setTargetFps(newValue.toInt());
+          }
+        },
+        immediate: false
       }
     },
-    expose: ['setStatus', 'switchMode', 'takePhoto', 'startRecord', 'stopRecord'],
+    expose: ['setStatus', 'switchMode', 'takePhoto', 'startRecord', 'stopRecord', 'restartCamera', 'destroyCamera'],
     methods: {
-      setStatus(text : string) {
-        if (this.statusView != null) {
-          this.statusView!.setText(text);
+      emitNativeEvent(eventName : string, payload : any) {
+        if (eventName == 'cameraready') {
+          this.$emit('cameraready', payload);
+          return;
+        }
+        if (eventName == 'nativeerror') {
+          this.$emit('nativeerror', payload);
+          return;
+        }
+        if (eventName == 'photodone') {
+          this.$emit('photodone', payload);
+          return;
+        }
+        if (eventName == 'recordstart') {
+          this.$emit('recordstart', payload);
+          return;
+        }
+        if (eventName == 'recorddone') {
+          this.$emit('recorddone', payload);
         }
       },
-      switchMode(mode : string) {
-        this.currentMode = mode;
+      resolveCameraView() : XycNativeCameraView | null {
+        if (this.cameraView != null) {
+          return this.cameraView;
+        }
+        return null;
+      },
+      requireCameraView() : XycNativeCameraView | null {
+        const view = this.resolveCameraView();
+        if (view != null) {
+          return view;
+        }
+        this.$emit('nativeerror', {
+          errorCode: '9001',
+          errorMessage: '原生相机组件不可用',
+          nativeMessage: 'XycNativeCameraView is not loaded.'
+        });
+        return null;
+      },
+      setStatus(text : string) {
+        const view = this.resolveCameraView();
+        if (view != null) {
+          view.setStatus(text);
+        }
+      },
+      switchMode(mode : string) : NativeCameraResult {
+        const view = this.requireCameraView();
+        if (view == null) {
+          return nativeViewUnavailable();
+        }
+        const result = parseResult(view.switchMode(mode));
         this.$emit('modechange', { mode: mode });
-        return createPendingResult('模式已切换，原生相机能力待接入');
+        return result;
       },
-      takePhoto() {
-        const message = '拍照能力待接入';
-        const result = createPendingResult(message);
-        this.setStatus(message);
+      takePhoto() : NativeCameraResult {
+        const view = this.requireCameraView();
+        if (view == null) {
+          return nativeViewUnavailable();
+        }
+        const result = parseResult(view.takePhoto());
         this.$emit('shuttertap', result);
         return result;
       },
-      startRecord() {
-        const message = '录像能力待接入';
-        const result = createPendingResult(message);
-        this.setStatus(message);
+      startRecord(options : any = {}) : NativeCameraResult {
+        const view = this.requireCameraView();
+        if (view == null) {
+          return nativeViewUnavailable();
+        }
+        const result = parseResult(view.startRecord(encode(options)));
         this.$emit('shuttertap', result);
         return result;
       },
-      stopRecord() {
-        const message = '停止录像能力待接入';
-        const result = createPendingResult(message);
-        this.setStatus(message);
+      stopRecord() : NativeCameraResult {
+        const view = this.requireCameraView();
+        if (view == null) {
+          return nativeViewUnavailable();
+        }
+        const result = parseResult(view.stopRecord());
         this.$emit('shuttertap', result);
+        return result;
+      },
+      restartCamera() : NativeCameraResult {
+        const view = this.requireCameraView();
+        if (view == null) {
+          return nativeViewUnavailable();
+        }
+        return parseResult(view.restartCamera());
+      },
+      destroyCamera() : NativeCameraResult {
+        const view = this.resolveCameraView();
+        if (view == null) {
+          this.cameraViewLoaded = false;
+          return ok({});
+        }
+        const result = parseResult(view.destroyCamera());
+        this.cameraView = null;
+        this.cameraViewLoaded = false;
         return result;
       }
     },
     NVLoad() : FrameLayout {
-      const context = $androidContext!;
-      density = context.getResources().getDisplayMetrics().density;
-      const root = new FrameLayout(context);
-      root.setLayoutParams(new ViewGroup.LayoutParams(
-        ViewGroup.LayoutParams.MATCH_PARENT,
-        ViewGroup.LayoutParams.MATCH_PARENT
-      ));
-      root.setBackgroundColor(Color.rgb(14, 20, 18));
-      this.rootView = root;
-
-      const focusFrame = new FrameLayout(context);
-      focusFrame.setBackground(makeStrokeDrawable(Color.argb(72, 255, 255, 255), 2, 18));
-      const focusParams = new FrameLayout.LayoutParams(dp(220), dp(300), Gravity.CENTER);
-      root.addView(focusFrame, focusParams);
-
-      const label = makeText(context, this.statusText, 13, Color.argb(210, 255, 255, 255), true);
-      label.setGravity(Gravity.CENTER);
-      label.setBackground(makeRoundDrawable(Color.argb(82, 0, 0, 0), 18));
-      label.setPadding(dp(14), 0, dp(14), 0);
-      this.statusView = label;
-      const labelParams = new FrameLayout.LayoutParams(
-        FrameLayout.LayoutParams.WRAP_CONTENT,
-        dp(36),
-        Gravity.CENTER
-      );
-      root.addView(label, labelParams);
-
-      return root;
+      const view = new XycNativeCameraView($androidContext!);
+      view.setEventCallback((eventName : string, payloadText : string) => {
+        this.emitNativeEvent(eventName, parseObject(payloadText));
+      });
+      view.setMode(this.mode);
+      view.setTargetFps(this.targetFps.toInt());
+      view.setStatus(this.statusText);
+      this.cameraView = view;
+      this.cameraViewLoaded = true;
+      return view;
     },
     NVLoaded() {
       this.$emit('nativeviewready');
     }
   }
 
-  function dp(value : number) : Int {
-    return (value * density).toInt();
+  function ok(data : any) : NativeCameraResult {
+    return {
+      success: true,
+      errorCode: '',
+      errorMessage: '',
+      nativeMessage: '',
+      data: data
+    };
   }
 
-  function makeText(context : Context, text : string, size : number, color : Int, bold : boolean) : TextView {
-    const view = new TextView(context);
-    view.setText(text);
-    view.setTextSize(size.toFloat());
-    view.setTextColor(color);
-    view.setIncludeFontPadding(false);
-    if (bold) {
-      view.setTypeface(Typeface.DEFAULT_BOLD);
-    }
-    return view;
-  }
-
-  function makeRoundDrawable(color : Int, radius : number) : GradientDrawable {
-    const drawable = new GradientDrawable();
-    drawable.setColor(color);
-    drawable.setCornerRadius(dp(radius).toFloat());
-    return drawable;
-  }
-
-  function makeStrokeDrawable(color : Int, strokeDp : number, radius : number) : GradientDrawable {
-    const drawable = new GradientDrawable();
-    drawable.setColor(Color.TRANSPARENT);
-    drawable.setStroke(dp(strokeDp), color);
-    drawable.setCornerRadius(dp(radius).toFloat());
-    return drawable;
-  }
-
-  function createPendingResult(message : string) : UTSJSONObject {
-    const result = {
+  function nativeViewUnavailable() : NativeCameraResult {
+    return {
       success: false,
       errorCode: '9001',
-      errorMessage: message,
+      errorMessage: '原生相机组件不可用',
+      nativeMessage: 'XycNativeCameraView is not loaded.',
       data: {}
     };
-    return result;
+  }
+
+  function parseObject(text : string) : any {
+    try {
+      return JSON.parse(text) ?? {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function parseResult(text : string) : NativeCameraResult {
+    try {
+      return JSON.parse(text) as NativeCameraResult;
+    } catch (error) {
+      return {
+        success: false,
+        errorCode: '9001',
+        errorMessage: '原生返回结构无效',
+        nativeMessage: `${error}`,
+        data: {}
+      };
+    }
+  }
+
+  function encode(value : any) : string {
+    return JSON.stringify(value ?? {}) ?? '{}';
   }
 </script>
 

@@ -13,13 +13,39 @@ const requiredFiles = [
   'pages/index/index.nvue',
   'pages/cameraX/index.nvue',
   'uni_modules/xyc-markvideo/package.json',
+  'uni_modules/xyc-markvideo/utssdk/app-android/AndroidManifest.xml',
+  'uni_modules/xyc-markvideo/utssdk/app-android/XycNativeCameraView.kt',
   'uni_modules/xyc-markvideo/utssdk/app-android/index.vue',
   'uni_modules/xyc-markvideo/utssdk/app-ios/index.vue',
 ];
 
+const removedPaths = [
+  'pages/index/index.vue',
+  'pages/index/cameraService.js',
+  'pages/camera',
+  'pages/camera/camera.vue',
+  'uni_modules/uts-markvideo',
+  'uni_modules/uts-markvideo/package.json',
+];
+
+async function exists(relativePath) {
+  try {
+    await access(path.join(root, relativePath));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 test('project contains the xyc-markvideo cameraX mainline files', async () => {
   for (const file of requiredFiles) {
     await access(path.join(root, file));
+  }
+});
+
+test('legacy uts-markvideo route and plugin files are deleted', async () => {
+  for (const file of removedPaths) {
+    assert.equal(await exists(file), false, `${file} should not exist`);
   }
 });
 
@@ -34,48 +60,46 @@ test('pages.json routes only the new nvue camera mainline', async () => {
   assert.doesNotMatch(JSON.stringify(pagesJson), /pages\/camera\/camera/);
 });
 
-test('index.nvue stores xyc payload and navigates to cameraX', async () => {
+test('index.nvue navigates directly to cameraX without watermark payload setup', async () => {
   const page = await readFile(path.join(root, 'pages/index/index.nvue'), 'utf8');
 
-  assert.match(page, /const DEFAULT_TEMPLATES/);
-  assert.match(page, /templateId: 'title-only'/);
-  assert.match(page, /templateId: 'title-subtitle'/);
-  assert.match(page, /templateId: 'png-title-subtitle'/);
-  assert.match(page, /uni\.setStorageSync\('xyc-camera-payload'/);
   assert.match(page, /uni\.navigateTo\(\{[\s\S]*url: '\/pages\/cameraX\/index'/);
+  assert.match(page, /30 fps/);
+  assert.doesNotMatch(page, /DEFAULT_TEMPLATES/);
+  assert.doesNotMatch(page, /xyc-camera-payload/);
   assert.doesNotMatch(page, /embedded-camera-payload/);
   assert.doesNotMatch(page, /uts-markvideo/);
   assert.doesNotMatch(page, /recordWatermarkVideo/);
+  assert.doesNotMatch(page, /setWatermark|clearWatermark|watermarkTemplate/);
 });
 
-test('cameraX nvue page owns UI and calls xyc-markvideo component methods', async () => {
+test('cameraX nvue page owns UI and calls xyc-markvideo native camera methods', async () => {
   const page = await readFile(path.join(root, 'pages/cameraX/index.nvue'), 'utf8');
 
   assert.match(page, /<xyc-markvideo/);
   assert.match(page, /ref="nativeCamera"/);
-  assert.match(page, /@nativeviewready="handleNativeReady"/);
-  assert.match(page, /uni\.getStorageSync\('xyc-camera-payload'\)/);
+  assert.match(page, /:target-fps="targetFps"/);
+  assert.match(page, /targetFps: 30/);
+  assert.match(page, /@cameraready="handleCameraReady"/);
+  assert.match(page, /@photodone="handlePhotoDone"/);
+  assert.match(page, /@recordstart="handleRecordStart"/);
+  assert.match(page, /@recorddone="handleRecordDone"/);
   assert.match(page, /resolveNativeCamera\(\)/);
   assert.match(page, /nativeCamera\.switchMode\(mode\)/);
   assert.match(page, /nativeCamera\.takePhoto\(\)/);
-  assert.match(page, /nativeCamera\.startRecord\(\)/);
+  assert.match(page, /handlePhotoDone\(event\)/);
+  assert.match(page, /拍照请求已受理|拍照中/);
+  assert.match(page, /nativeCamera\.startRecord\(\{ fps: this\.targetFps \}\)/);
   assert.match(page, /nativeCamera\.stopRecord\(\)/);
-  assert.match(page, /normalizeNativeResult\(result, fallbackMessage\)/);
-  assert.match(page, /拍照能力待接入/);
-  assert.match(page, /录像能力待接入/);
-  assert.match(page, /闪光灯原生能力待接入/);
-  assert.match(page, /焦段 \$\{zoom\} 原生能力待接入/);
+  assert.match(page, /nativeCamera\.restartCamera\(\)/);
   assert.match(page, /class="topBar"/);
-  assert.match(page, /class="watermarkFrame"/);
-  assert.match(page, /class="zoomRail"/);
   assert.match(page, /class="bottomPanel"/);
-  assert.match(page, /class="templatePanel"/);
   assert.match(page, /视频/);
   assert.match(page, /照片/);
-  assert.match(page, /广角/);
   assert.doesNotMatch(page, /<uts-markvideo-camera/);
   assert.doesNotMatch(page, /@\/uni_modules\/uts-markvideo/);
   assert.doesNotMatch(page, /recordWatermarkVideo/);
+  assert.doesNotMatch(page, /setWatermark|clearWatermark|watermarkTemplate|watermarkFrame/);
 });
 
 test('xyc-markvideo package advertises Android nvue component support only', async () => {
@@ -94,41 +118,60 @@ test('xyc-markvideo package advertises Android nvue component support only', asy
   assert.equal(pkg.uni_modules.platforms.client['uni-app-x'].app.ios, '-');
 });
 
-test('xyc-markvideo Android component exposes the first native camera surface contract', async () => {
+test('xyc-markvideo Android component bridges to native camera view', async () => {
   const android = await readFile(
     path.join(root, 'uni_modules/xyc-markvideo/utssdk/app-android/index.vue'),
     'utf8',
   );
 
   assert.match(android, /name: 'xyc-markvideo'/);
+  assert.match(android, /import \{ XycNativeCameraView \} from 'uts\.xyc\.markvideo\.android'/);
   assert.match(android, /NVLoad\(\) : FrameLayout/);
+  assert.match(android, /new XycNativeCameraView/);
+  assert.match(android, /new XycNativeCameraView\(\$androidContext!\)/);
   assert.match(android, /'nativeviewready'/);
-  assert.match(android, /expose: \['setStatus', 'switchMode', 'takePhoto', 'startRecord', 'stopRecord'\]/);
+  assert.match(android, /'cameraready'/);
+  assert.match(android, /'photodone'/);
+  assert.match(android, /'recordstart'/);
+  assert.match(android, /'recorddone'/);
+  assert.match(android, /expose: \['setStatus', 'switchMode', 'takePhoto', 'startRecord', 'stopRecord', 'restartCamera', 'destroyCamera'\]/);
   assert.match(android, /switchMode\(mode : string\)/);
   assert.match(android, /takePhoto\(\)/);
-  assert.match(android, /startRecord\(\)/);
+  assert.match(android, /startRecord\(options : any = \{\}\)/);
   assert.match(android, /stopRecord\(\)/);
-  assert.match(android, /currentMode: 'video'/);
-  assert.match(android, /const message = '拍照能力待接入'/);
-  assert.match(android, /const result = createPendingResult\(message\)/);
-  assert.match(android, /errorCode: '9001'/);
-  assert.doesNotMatch(android, /setMode\(mode/);
+  assert.doesNotMatch(android, /createPendingResult/);
+  assert.doesNotMatch(android, /待接入/);
   assert.doesNotMatch(android, /uts-markvideo/);
   assert.doesNotMatch(android, /recordWatermarkVideo/);
 });
 
-test('legacy uts-markvideo files are not part of the new registered route chain', async () => {
-  const pagesJson = await readFile(path.join(root, 'pages.json'), 'utf8');
-  const indexPage = await readFile(path.join(root, 'pages/index/index.nvue'), 'utf8');
-  const cameraXPage = await readFile(path.join(root, 'pages/cameraX/index.nvue'), 'utf8');
-  const xycPackage = await readFile(path.join(root, 'uni_modules/xyc-markvideo/package.json'), 'utf8');
+test('xyc-markvideo Android native view uses camera preview, photo, and 30fps recording', async () => {
+  const nativeView = await readFile(
+    path.join(root, 'uni_modules/xyc-markvideo/utssdk/app-android/XycNativeCameraView.kt'),
+    'utf8',
+  );
 
-  for (const text of [pagesJson, indexPage, cameraXPage, xycPackage]) {
-    assert.doesNotMatch(text, /pages\/camera\/camera/);
-    assert.doesNotMatch(text, /<uts-markvideo-camera/);
-    assert.doesNotMatch(text, /recordWatermarkVideo/);
-    assert.doesNotMatch(text, /@\/uni_modules\/uts-markvideo/);
-  }
+  assert.match(nativeView, /class XycNativeCameraView/);
+  assert.match(nativeView, /SurfaceView/);
+  assert.match(nativeView, /Camera\.open/);
+  assert.match(nativeView, /takePicture/);
+  assert.match(nativeView, /拍照请求已受理/);
+  assert.match(nativeView, /MediaRecorder/);
+  assert.match(nativeView, /setVideoFrameRate\(targetFps\)/);
+  assert.match(nativeView, /DEFAULT_TARGET_FPS = 30/);
+  assert.match(nativeView, /setPreviewFpsRange/);
+  assert.match(nativeView, /RECORD_AUDIO/);
+  assert.doesNotMatch(nativeView, /Watermark|watermark|setWatermark|clearWatermark/);
+});
+
+test('xyc-markvideo Android manifest declares camera and microphone permissions', async () => {
+  const androidManifest = await readFile(
+    path.join(root, 'uni_modules/xyc-markvideo/utssdk/app-android/AndroidManifest.xml'),
+    'utf8',
+  );
+
+  assert.match(androidManifest, /android\.permission\.CAMERA/);
+  assert.match(androidManifest, /android\.permission\.RECORD_AUDIO/);
 });
 
 test('Vue 3 app entry is still declared in manifest', async () => {

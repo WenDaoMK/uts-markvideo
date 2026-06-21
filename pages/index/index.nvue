@@ -2,102 +2,29 @@
   <view class="page">
     <view class="header">
       <text class="eyebrow">XYC MarkVideo</text>
-      <text class="title">水印相机首页</text>
-      <text class="hint">编辑一组默认水印参数，然后进入 cameraX 相机页。</text>
+      <text class="title">原生相机</text>
+      <text class="subtitle">Android first MVP</text>
     </view>
 
-    <view class="templateList">
-      <view
-        v-for="template in templates"
-        :key="template.templateId"
-        class="templateCard"
-        :class="{ selectedCard: selectedTemplateId === template.templateId }"
-        @click="selectTemplate(template.templateId)"
-      >
-        <view class="templatePreview">
-          <view v-if="template.templateType === 'image_title_subtitle'" class="templateImage"></view>
-          <view class="templateCopy">
-            <text class="templateName">{{ template.templateName }}</text>
-            <text class="templateText">{{ template.mainTitleText }}</text>
-            <text class="templateSubtext">{{ template.subtitleText || '无副标题' }}</text>
-          </view>
-        </view>
+    <view class="summary">
+      <view class="summaryRow">
+        <text class="summaryLabel">模式</text>
+        <text class="summaryValue">照片 / 视频</text>
+      </view>
+      <view class="summaryRow">
+        <text class="summaryLabel">录像</text>
+        <text class="summaryValue">30 fps</text>
       </view>
     </view>
 
-    <view class="editor">
-      <text class="editorTitle">当前模板文字</text>
-      <input class="input" v-model="draftMainTitle" maxlength="40" placeholder="主标题" />
-      <input class="input" v-model="draftSubtitle" maxlength="80" placeholder="副标题" />
-      <button class="secondaryButton" @click="applyDraft">更新当前模板</button>
-    </view>
-
-    <button class="primaryButton" @click="openCameraX">进入 cameraX 相机页</button>
+    <button class="primaryButton" @click="openCameraX">进入相机</button>
   </view>
 </template>
 
 <script>
-const DEFAULT_TEMPLATES = [
-  {
-    templateId: 'title-only',
-    templateName: '纯主标题',
-    templateType: 'title_text',
-    mainTitleText: '今日水印相机',
-    subtitleText: ''
-  },
-  {
-    templateId: 'title-subtitle',
-    templateName: '主副标题',
-    templateType: 'title_subtitle_text',
-    mainTitleText: '门店巡检',
-    subtitleText: '照片和录像共用同一套水印'
-  },
-  {
-    templateId: 'png-title-subtitle',
-    templateName: 'PNG 图文',
-    templateType: 'image_title_subtitle',
-    mainTitleText: '交付留档',
-    subtitleText: 'PNG 图片 + 主副标题'
-  }
-]
-
 export default {
-  data() {
-    return {
-      templates: DEFAULT_TEMPLATES.map((template) => ({ ...template })),
-      selectedTemplateId: DEFAULT_TEMPLATES[0].templateId,
-      draftMainTitle: DEFAULT_TEMPLATES[0].mainTitleText,
-      draftSubtitle: DEFAULT_TEMPLATES[0].subtitleText
-    }
-  },
-  mounted() {
-    this.syncCameraPayload()
-  },
   methods: {
-    currentTemplate() {
-      return this.templates.find((template) => template.templateId === this.selectedTemplateId) || this.templates[0]
-    },
-    selectTemplate(templateId) {
-      this.selectedTemplateId = templateId
-      const template = this.currentTemplate()
-      this.draftMainTitle = template.mainTitleText
-      this.draftSubtitle = template.subtitleText
-      this.syncCameraPayload()
-    },
-    applyDraft() {
-      const selected = this.currentTemplate()
-      selected.mainTitleText = this.draftMainTitle || selected.mainTitleText
-      selected.subtitleText = selected.templateType === 'title_text' ? '' : (this.draftSubtitle || selected.subtitleText)
-      this.syncCameraPayload()
-    },
-    syncCameraPayload() {
-      uni.setStorageSync('xyc-camera-payload', {
-        templates: this.templates,
-        selectedTemplateId: this.selectedTemplateId
-      })
-    },
     openCameraX() {
-      this.syncCameraPayload()
       uni.navigateTo({
         url: '/pages/cameraX/index'
       })
@@ -108,13 +35,14 @@ export default {
 
 <style>
 .page {
-  height: 100%;
-  padding: 22px 18px 28px;
+  flex: 1;
+  padding: 28px 18px;
   background-color: #f5f8f6;
 }
 
 .header {
-  margin-bottom: 16px;
+  margin-top: 16px;
+  margin-bottom: 22px;
 }
 
 .eyebrow {
@@ -124,26 +52,22 @@ export default {
 }
 
 .title {
-  margin-top: 5px;
+  margin-top: 6px;
   color: #17212b;
-  font-size: 24px;
+  font-size: 28px;
   font-weight: 800;
-  line-height: 32px;
+  line-height: 36px;
 }
 
-.hint {
-  margin-top: 5px;
+.subtitle {
+  margin-top: 6px;
   color: #687789;
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 14px;
+  line-height: 22px;
 }
 
-.templateList {
-  margin-bottom: 14px;
-}
-
-.templateCard,
-.editor {
+.summary {
+  padding: 14px;
   border-width: 1px;
   border-style: solid;
   border-color: #d8e2dc;
@@ -151,89 +75,31 @@ export default {
   background-color: #ffffff;
 }
 
-.templateCard {
-  margin-bottom: 10px;
-  padding: 12px;
-}
-
-.selectedCard {
-  border-color: #126fdb;
-  background-color: #edf5ff;
-}
-
-.templatePreview {
+.summaryRow {
+  height: 36px;
   flex-direction: row;
   align-items: center;
+  justify-content: space-between;
 }
 
-.templateImage {
-  width: 42px;
-  height: 42px;
-  margin-right: 12px;
-  border-radius: 8px;
-  background-color: #4d7a39;
-}
-
-.templateCopy {
-  flex: 1;
-}
-
-.templateName,
-.editorTitle {
-  color: #17212b;
-  font-size: 15px;
-  font-weight: 700;
-  line-height: 22px;
-}
-
-.templateText {
-  color: #26313b;
-  font-size: 14px;
-  line-height: 20px;
-}
-
-.templateSubtext {
+.summaryLabel {
   color: #687789;
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 13px;
 }
 
-.editor {
-  margin-bottom: 16px;
-  padding: 14px;
-}
-
-.input {
-  height: 42px;
-  margin-top: 10px;
-  padding-left: 12px;
-  padding-right: 12px;
-  border-width: 1px;
-  border-style: solid;
-  border-color: #ced9d3;
-  border-radius: 8px;
-  background-color: #fbfdfc;
+.summaryValue {
   color: #17212b;
   font-size: 14px;
-}
-
-.primaryButton,
-.secondaryButton {
-  border-radius: 8px;
-  font-size: 15px;
   font-weight: 700;
 }
 
 .primaryButton {
-  height: 46px;
+  height: 48px;
+  margin-top: 18px;
+  border-radius: 8px;
   background-color: #126fdb;
-  color: #ffffff;
-}
-
-.secondaryButton {
-  height: 42px;
-  margin-top: 10px;
-  background-color: #e9f0ed;
-  color: #17212b;
+  color: white !important;
+  font-size: 15px;
+  font-weight: 700;
 }
 </style>
