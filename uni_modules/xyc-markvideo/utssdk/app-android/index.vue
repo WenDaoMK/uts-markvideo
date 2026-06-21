@@ -72,7 +72,7 @@
         immediate: false
       }
     },
-    expose: ['setStatus', 'switchMode', 'takePhoto', 'startRecord', 'stopRecord', 'restartCamera', 'destroyCamera'],
+    expose: ['setStatus', 'switchMode', 'takePhoto', 'startRecord', 'stopRecord', 'restartCamera', 'preparePermissions', 'prepareRecordPermissions', 'destroyCamera'],
     methods: {
       emitNativeEvent(eventName : string, payload : any) {
         if (eventName == 'cameraready') {
@@ -161,6 +161,20 @@
           return nativeViewUnavailable();
         }
         return parseResult(view.restartCamera());
+      },
+      preparePermissions() : NativeCameraResult {
+        const view = this.requireCameraView();
+        if (view == null) {
+          return nativeViewUnavailable();
+        }
+        return parseResult(view.preparePermissions());
+      },
+      prepareRecordPermissions() : NativeCameraResult {
+        const view = this.requireCameraView();
+        if (view == null) {
+          return nativeViewUnavailable();
+        }
+        return parseResult(view.prepareRecordPermissions());
       },
       destroyCamera() : NativeCameraResult {
         const view = this.resolveCameraView();

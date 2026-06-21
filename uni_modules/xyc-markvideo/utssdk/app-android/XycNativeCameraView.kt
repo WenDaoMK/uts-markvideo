@@ -2,18 +2,23 @@ package uts.xyc.markvideo.android
 
 import android.Manifest
 import android.app.Activity
+import android.content.ContentValues
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.hardware.Camera
+import android.media.MediaScannerConnection
 import android.media.MediaRecorder
 import android.os.Build
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.view.Gravity
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.TextView
@@ -41,6 +46,8 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     private var photoBusy = false
     private var recordingStartedAt = 0L
     private var outputFile: File? = null
+    private var cameraPermissionRequested = false
+    private var cameraPermissionRetryCount = 0
 
     init {
         setBackgroundColor(Color.BLACK)
@@ -69,6 +76,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     fun setStatus(text: String) {
         runOnMain {
             statusView.text = text
+            statusView.visibility = if (shouldShowCenterStatus(text)) View.VISIBLE else View.GONE
         }
     }
 
@@ -89,6 +97,45 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         return runOnMainSync {
             closeCamera()
             openCameraIfReady()
+        }
+    }
+
+    fun preparePermissions(): String {
+        return runOnMainSync {
+            if (!hasPermission(Manifest.permission.CAMERA)) {
+                requestCameraPermissionIfNeeded(REQUEST_PREPARE_PERMISSIONS)
+                return@runOnMainSync failAndEmit(
+                    "1001",
+                    "请授权相机权限",
+                    "CAMERA permission is not granted."
+                )
+            }
+
+            if (holderReady && camera == null) {
+                openCameraIfReady()
+            } else {
+                ok(payload().put("message", "权限已准备"))
+            }
+        }
+    }
+
+    fun prepareRecordPermissions(): String {
+        return runOnMainSync {
+            val missingPermissions = recordMissingPermissions()
+            if (missingPermissions.isNotEmpty()) {
+                if (missingPermissions.contains(Manifest.permission.CAMERA)) {
+                    cameraPermissionRequested = true
+                    cameraPermissionRetryCount = 0
+                    scheduleCameraPermissionRetry()
+                }
+                requestPermissions(missingPermissions.toTypedArray(), REQUEST_PREPARE_RECORD_PERMISSIONS)
+                return@runOnMainSync failAndEmit(
+                    "1003",
+                    recordPermissionMessage(missingPermissions),
+                    "Missing permissions: ${missingPermissions.joinToString(",")}"
+                )
+            }
+            ok(payload().put("message", "录像权限已准备"))
         }
     }
 
@@ -125,10 +172,16 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
                         width = previewSize.width,
                         height = previewSize.height
                     )
+                    try {
+                        val albumResult = saveMediaToAlbum(file, "image/jpeg", false)
+                        appendAlbumSuccess(dataPayload, albumResult, "照片已保存到相册")
+                    } catch (throwable: Throwable) {
+                        appendAlbumFailure(dataPayload, "照片已生成，相册保存失败")
+                        emitError("1501", "照片已生成，相册保存失败", throwable.message ?: throwable.javaClass.simpleName)
+                    }
                     emit("photodone", dataPayload)
-                    setStatus("拍照完成")
+                    setStatus(dataPayload.optString("message", "照片已生成"))
                 } catch (throwable: Throwable) {
-                    file.delete()
                     failAndEmit("1301", "拍照失败", throwable.message ?: throwable.javaClass.simpleName)
                 } finally {
                     photoBusy = false
@@ -147,9 +200,14 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             if (recording) {
                 return@runOnMainSync failAndEmit("1403", "当前状态不允许执行该操作", "duplicate startRecord")
             }
-            if (!hasPermission(Manifest.permission.RECORD_AUDIO)) {
-                requestPermission(Manifest.permission.RECORD_AUDIO, REQUEST_AUDIO_PERMISSION)
-                return@runOnMainSync failAndEmit("1002", "麦克风权限未授权", "RECORD_AUDIO permission is not granted.")
+            val missingPermissions = recordMissingPermissions()
+            if (missingPermissions.isNotEmpty()) {
+                requestPermissions(missingPermissions.toTypedArray(), REQUEST_PREPARE_RECORD_PERMISSIONS)
+                return@runOnMainSync failAndEmit(
+                    "1003",
+                    recordPermissionMessage(missingPermissions),
+                    "Missing permissions: ${missingPermissions.joinToString(",")}"
+                )
             }
             val activeCamera = camera ?: return@runOnMainSync failAndEmit(
                 "1104",
@@ -251,8 +309,16 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
                 durationMs = durationMs,
                 width = videoSize.width,
                 height = videoSize.height
-            ).put("fps", targetFps)
-            setStatus("录像完成")
+            )
+                .put("fps", targetFps)
+            try {
+                val albumResult = saveMediaToAlbum(file, "video/mp4", true)
+                appendAlbumSuccess(data, albumResult, "视频已保存到相册")
+            } catch (throwable: Throwable) {
+                appendAlbumFailure(data, "视频已生成，相册保存失败")
+                emitError("1501", "视频已生成，相册保存失败", throwable.message ?: throwable.javaClass.simpleName)
+            }
+            setStatus(data.optString("message", "视频已生成"))
             emit("recorddone", data)
             ok(data)
         }
@@ -272,15 +338,25 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         closeCamera()
     }
 
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        super.onWindowFocusChanged(hasWindowFocus)
+        if (hasWindowFocus && holderReady && camera == null && hasPermission(Manifest.permission.CAMERA)) {
+            cameraPermissionRequested = false
+            openCameraIfReady()
+        }
+    }
+
     private fun openCameraIfReady(): String {
         if (!holderReady) {
             return failAndEmit("1104", "相机未就绪", "Preview surface is not ready.")
         }
         if (!hasPermission(Manifest.permission.CAMERA)) {
-            requestPermission(Manifest.permission.CAMERA, REQUEST_CAMERA_PERMISSION)
+            requestCameraPermissionIfNeeded(REQUEST_CAMERA_PERMISSION)
             setStatus("请授权相机权限后重试")
             return failAndEmit("1001", "相机权限未授权", "CAMERA permission is not granted.")
         }
+        cameraPermissionRequested = false
+        cameraPermissionRetryCount = 0
         if (camera != null) {
             return ok(cameraReadyPayload())
         }
@@ -435,6 +511,97 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             .put("height", height)
     }
 
+    private fun appendAlbumSuccess(data: org.json.JSONObject, albumResult: AlbumSaveResult, message: String): org.json.JSONObject {
+        return data
+            .put("savedToAlbum", true)
+            .put("albumPath", albumResult.albumPath)
+            .put("albumUri", albumResult.albumUri)
+            .put("message", message)
+    }
+
+    private fun appendAlbumFailure(data: org.json.JSONObject, message: String): org.json.JSONObject {
+        return data
+            .put("savedToAlbum", false)
+            .put("albumPath", "")
+            .put("albumUri", "")
+            .put("message", message)
+    }
+
+    private fun saveMediaToAlbum(source: File, mimeType: String, isVideo: Boolean): AlbumSaveResult {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            saveMediaToScopedAlbum(source, mimeType, isVideo)
+        } else {
+            saveMediaToLegacyAlbum(source, mimeType, isVideo)
+        }
+    }
+
+    private fun saveMediaToScopedAlbum(source: File, mimeType: String, isVideo: Boolean): AlbumSaveResult {
+        val resolver = context.contentResolver
+        val collection = if (isVideo) {
+            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        } else {
+            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        }
+        val relativePath = if (isVideo) {
+            "${Environment.DIRECTORY_MOVIES}/$ALBUM_DIRECTORY_NAME"
+        } else {
+            "${Environment.DIRECTORY_PICTURES}/$ALBUM_DIRECTORY_NAME"
+        }
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, source.name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(collection, values)
+            ?: throw IllegalStateException("Failed to create MediaStore item.")
+
+        try {
+            resolver.openOutputStream(uri)?.use { output ->
+                source.inputStream().use { input ->
+                    input.copyTo(output)
+                }
+            } ?: throw IllegalStateException("Failed to open MediaStore output stream.")
+        } catch (throwable: Throwable) {
+            resolver.delete(uri, null, null)
+            throw throwable
+        }
+
+        val publishValues = ContentValues().apply {
+            put(MediaStore.MediaColumns.IS_PENDING, 0)
+        }
+        resolver.update(uri, publishValues, null, null)
+        return AlbumSaveResult(uri.toString(), uri.toString())
+    }
+
+    private fun saveMediaToLegacyAlbum(source: File, mimeType: String, isVideo: Boolean): AlbumSaveResult {
+        if (needsLegacyAlbumPermission() && !hasPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
+            throw SecurityException("WRITE_EXTERNAL_STORAGE permission is not granted.")
+        }
+        val publicDirectory = Environment.getExternalStoragePublicDirectory(
+            if (isVideo) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES
+        )
+        val targetDirectory = File(publicDirectory, ALBUM_DIRECTORY_NAME)
+        if (!targetDirectory.exists() && !targetDirectory.mkdirs()) {
+            throw IllegalStateException("Failed to create album directory.")
+        }
+        val targetFile = File(targetDirectory, source.name)
+        source.copyTo(targetFile, overwrite = true)
+        MediaScannerConnection.scanFile(context, arrayOf(targetFile.absolutePath), arrayOf(mimeType), null)
+        return AlbumSaveResult(targetFile.absolutePath, targetFile.absolutePath)
+    }
+
+    private fun shouldShowCenterStatus(text: String): Boolean {
+        return text != "相机已准备" &&
+            text != "拍照完成" &&
+            text != "录像完成" &&
+            text != "照片已保存到相册" &&
+            text != "视频已保存到相册" &&
+            text != "照片已生成，相册保存失败" &&
+            text != "视频已生成，相册保存失败" &&
+            text != "录像中"
+    }
+
     private fun ok(data: org.json.JSONObject): String {
         return payload()
             .put("success", true)
@@ -446,12 +613,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     }
 
     private fun failAndEmit(errorCode: String, errorMessage: String, nativeMessage: String): String {
-        val data = payload()
-            .put("errorCode", errorCode)
-            .put("errorMessage", errorMessage)
-            .put("nativeMessage", nativeMessage)
-        emit("nativeerror", data)
-        setStatus(errorMessage)
+        emitError(errorCode, errorMessage, nativeMessage)
         return payload()
             .put("success", false)
             .put("errorCode", errorCode)
@@ -459,6 +621,15 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             .put("nativeMessage", nativeMessage)
             .put("data", payload())
             .toString()
+    }
+
+    private fun emitError(errorCode: String, errorMessage: String, nativeMessage: String) {
+        val data = payload()
+            .put("errorCode", errorCode)
+            .put("errorMessage", errorMessage)
+            .put("nativeMessage", nativeMessage)
+        emit("nativeerror", data)
+        setStatus(errorMessage)
     }
 
     private fun payload(): org.json.JSONObject {
@@ -469,15 +640,73 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         eventCallback?.invoke(eventName, data.toString())
     }
 
-    private fun requestPermission(permission: String, requestCode: Int) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+    private fun requestCameraPermissionIfNeeded(requestCode: Int) {
+        if (cameraPermissionRequested) return
+        cameraPermissionRequested = true
+        cameraPermissionRetryCount = 0
+        requestPermissions(arrayOf(Manifest.permission.CAMERA), requestCode)
+        scheduleCameraPermissionRetry()
+    }
+
+    private fun requestPermissions(permissions: Array<String>, requestCode: Int) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || permissions.isEmpty()) return
         val activity = findActivity(context) ?: return
-        activity.requestPermissions(arrayOf(permission), requestCode)
+        activity.requestPermissions(permissions, requestCode)
+    }
+
+    private fun scheduleCameraPermissionRetry() {
+        mainHandler.postDelayed({
+            if (!holderReady || camera != null || !cameraPermissionRequested) {
+                return@postDelayed
+            }
+            if (hasPermission(Manifest.permission.CAMERA)) {
+                cameraPermissionRequested = false
+                cameraPermissionRetryCount = 0
+                openCameraIfReady()
+                return@postDelayed
+            }
+            cameraPermissionRetryCount += 1
+            if (cameraPermissionRetryCount < CAMERA_PERMISSION_RETRY_LIMIT) {
+                scheduleCameraPermissionRetry()
+            }
+        }, CAMERA_PERMISSION_RETRY_DELAY_MS)
     }
 
     private fun hasPermission(permission: String): Boolean {
         return Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
             context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun needsLegacyAlbumPermission(): Boolean {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+    }
+
+    private fun recordMissingPermissions(): ArrayList<String> {
+        val missingPermissions = ArrayList<String>()
+        if (!hasPermission(Manifest.permission.CAMERA)) {
+            missingPermissions.add(Manifest.permission.CAMERA)
+        }
+        if (!hasPermission(Manifest.permission.RECORD_AUDIO)) {
+            missingPermissions.add(Manifest.permission.RECORD_AUDIO)
+        }
+        if (needsLegacyAlbumPermission() && !hasPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
+            missingPermissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+        return missingPermissions
+    }
+
+    private fun recordPermissionMessage(missingPermissions: ArrayList<String>): String {
+        val labels = ArrayList<String>()
+        if (missingPermissions.contains(Manifest.permission.CAMERA)) {
+            labels.add("相机")
+        }
+        if (missingPermissions.contains(Manifest.permission.RECORD_AUDIO)) {
+            labels.add("麦克风")
+        }
+        if (missingPermissions.contains(Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
+            labels.add("相册")
+        }
+        return "请授权${labels.joinToString("、")}权限"
     }
 
     private fun findActivity(startContext: Context): Activity? {
@@ -533,7 +762,13 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     private companion object {
         const val DEFAULT_TARGET_FPS = 30
         const val REQUEST_CAMERA_PERMISSION = 7201
-        const val REQUEST_AUDIO_PERMISSION = 7202
+        const val REQUEST_PREPARE_PERMISSIONS = 7204
+        const val REQUEST_PREPARE_RECORD_PERMISSIONS = 7205
         const val MAIN_THREAD_TIMEOUT_MS = 4_000L
+        const val CAMERA_PERMISSION_RETRY_DELAY_MS = 350L
+        const val CAMERA_PERMISSION_RETRY_LIMIT = 240
+        const val ALBUM_DIRECTORY_NAME = "xyc-markvideo"
     }
+
+    private data class AlbumSaveResult(val albumPath: String, val albumUri: String)
 }

@@ -17,39 +17,47 @@
     />
 
     <cover-view class="topBar">
-      <cover-view class="backButton" @click="goBack">‹</cover-view>
-      <cover-view class="topTitleBox">
-        <cover-view class="topTitle">{{ mode === 'video' ? '视频' : '照片' }}</cover-view>
-        <cover-view class="topSub">{{ nativeStatus }}</cover-view>
+      <cover-view class="topSide">
+        <cover-view class="backButton" @click="goBack">
+          <text class="backIcon">‹</text>
+        </cover-view>
       </cover-view>
-      <cover-view class="fpsPill">{{ targetFps }}fps</cover-view>
+      <cover-view class="topTitleBox">
+        <text class="topTitle">{{ mode === 'video' ? '视频' : '照片' }}</text>
+        <text class="topSub">{{ nativeStatus }}</text>
+      </cover-view>
+      <cover-view class="topSide">
+        <cover-view class="fpsPill">
+          <text class="fpsText">{{ targetFps }}fps</text>
+        </cover-view>
+      </cover-view>
     </cover-view>
 
-    <cover-view class="recordPill" v-if="isRecording">REC</cover-view>
+    <cover-view class="recordPill" v-if="isRecording">
+      <text class="recordText">REC</text>
+    </cover-view>
 
     <cover-view class="bottomPanel">
-      <cover-view class="modeSwitch">
-        <cover-view class="modeButton" :class="{ modeSelected: mode === 'video' }" @click="setMode('video')">视频</cover-view>
-        <cover-view class="modeButton" :class="{ modeSelected: mode === 'photo' }" @click="setMode('photo')">照片</cover-view>
+      <cover-view class="modeSwitchWrap">
+        <cover-view class="modeSwitch">
+          <cover-view :class="videoModeButtonClass" @click="setMode('video')">
+            <text :class="videoModeTextClass">视频</text>
+          </cover-view>
+          <cover-view :class="photoModeButtonClass" @click="setMode('photo')">
+            <text :class="photoModeTextClass">照片</text>
+          </cover-view>
+        </cover-view>
       </cover-view>
 
       <cover-view class="mainControls">
-        <cover-view class="resultButton" @click="toggleResultStrip">
+        <cover-view class="resultButton">
           <cover-view class="resultThumb"></cover-view>
         </cover-view>
-        <cover-view class="shutter" :class="{ shutterVideo: mode === 'video' }" @click="pressShutter">
-          <cover-view
-            class="shutterCore"
-            :class="{ shutterCoreVideo: mode === 'video', shutterCoreRecording: isRecording }"
-          ></cover-view>
+        <cover-view :class="shutterClass" @click="pressShutter">
+          <cover-view :class="shutterCoreClass"></cover-view>
         </cover-view>
-        <cover-view class="cameraButton" @click="restartCamera">↻</cover-view>
-      </cover-view>
-
-      <cover-view class="resultStrip" v-if="resultStripOpen">
-        <cover-view class="resultLine">
-          <cover-view class="resultLabel">最新文件</cover-view>
-          <cover-view class="resultText">{{ lastResultText }}</cover-view>
+        <cover-view class="cameraButton" @click="restartCamera">
+          <text class="cameraIcon">↻</text>
         </cover-view>
       </cover-view>
     </cover-view>
@@ -65,8 +73,42 @@ export default {
       nativeStatus: '相机初始化中',
       nativeReady: false,
       isRecording: false,
-      resultStripOpen: false,
-      lastResultText: '暂无'
+      stopPending: false
+    }
+  },
+  computed: {
+    videoModeButtonClass() {
+      return this.mode === 'video' ? ['modeButton', 'modeSelected'] : ['modeButton']
+    },
+    photoModeButtonClass() {
+      return this.mode === 'photo' ? ['modeButton', 'modeSelected'] : ['modeButton']
+    },
+    videoModeTextClass() {
+      return this.mode === 'video' ? ['modeText', 'modeTextSelected'] : ['modeText']
+    },
+    photoModeTextClass() {
+      return this.mode === 'photo' ? ['modeText', 'modeTextSelected'] : ['modeText']
+    },
+    shutterClass() {
+      return this.mode === 'video' ? ['shutter', 'shutterVideo'] : ['shutter']
+    },
+    shutterCoreClass() {
+      if (this.isRecording && !this.stopPending) {
+        return ['shutterCore', 'shutterCoreVideo', 'shutterCoreRecording']
+      }
+      return this.mode === 'video' ? ['shutterCore', 'shutterCoreVideo'] : ['shutterCore']
+    }
+  },
+  onShow() {
+    if (this.nativeReady) {
+      setTimeout(() => {
+        this.prepareCameraPermissions()
+      }, 250)
+    }
+    if (this.nativeReady && this.nativeStatus === '相机权限未授权') {
+      setTimeout(() => {
+        this.retryCameraAfterPermission()
+      }, 250)
     }
   },
   methods: {
@@ -96,13 +138,22 @@ export default {
     handleNativeReady() {
       this.nativeReady = true
       this.nativeStatus = '相机组件已加载'
+      setTimeout(() => {
+        this.prepareCameraPermissions()
+      }, 120)
     },
     handleCameraReady(event) {
       const detail = this.eventDetail(event)
       this.nativeStatus = detail.message || '相机已准备'
+      setTimeout(() => {
+        this.prepareRecordPermissions(true)
+      }, 180)
     },
     handleNativeError(event) {
       const detail = this.eventDetail(event)
+      if (detail && detail.errorCode === '1501') {
+        return
+      }
       this.nativeStatus = detail.errorMessage || '相机错误'
     },
     handleNativeShutter(event) {
@@ -119,32 +170,30 @@ export default {
     },
     handlePhotoDone(event) {
       const detail = this.eventDetail(event)
-      this.nativeStatus = '拍照完成'
-      this.lastResultText = detail.tempFilePath || detail.path || '照片已生成'
-      this.resultStripOpen = true
+      this.nativeStatus = detail.message || '照片已保存到相册'
     },
     handleRecordStart(event) {
       const detail = this.eventDetail(event)
       this.isRecording = true
+      this.stopPending = false
       this.nativeStatus = detail.message || '录像中'
     },
     handleRecordDone(event) {
       const detail = this.eventDetail(event)
       this.isRecording = false
-      this.nativeStatus = '录像完成'
-      this.lastResultText = detail.tempFilePath || detail.path || '视频已生成'
-      this.resultStripOpen = true
+      this.stopPending = false
+      this.nativeStatus = detail.message || '视频已保存到相册'
     },
     goBack() {
-      if (this.isRecording) {
-        this.nativeStatus = '请先停止录像'
+      if (this.isRecording || this.stopPending) {
+        this.nativeStatus = this.stopPending ? '请等待视频保存完成' : '请先停止录像'
         return
       }
       uni.navigateBack()
     },
     setMode(mode) {
-      if (this.isRecording) {
-        this.nativeStatus = '录像中不能切换模式'
+      if (this.isRecording || this.stopPending) {
+        this.nativeStatus = this.stopPending ? '请等待视频保存完成' : '录像中不能切换模式'
         return
       }
       this.mode = mode
@@ -175,8 +224,14 @@ export default {
       }
 
       if (!this.isRecording) {
+        if (this.stopPending) {
+          return
+        }
         if (typeof nativeCamera.startRecord !== 'function') {
           this.nativeStatus = '录像接口不可用'
+          return
+        }
+        if (!this.prepareRecordPermissions()) {
           return
         }
         const result = this.normalizeNativeResult(await nativeCamera.startRecord({ fps: this.targetFps }), '录像开始失败')
@@ -193,19 +248,51 @@ export default {
         this.nativeStatus = '停止录像接口不可用'
         return
       }
+      this.isRecording = false
+      this.stopPending = true
+      this.nativeStatus = '正在保存视频'
       const result = this.normalizeNativeResult(await nativeCamera.stopRecord(), '录像停止失败')
+      this.stopPending = false
       if (result.success) {
-        this.isRecording = false
-        this.nativeStatus = '录像完成'
-        this.lastResultText = result.data && result.data.tempFilePath ? result.data.tempFilePath : '视频已生成'
-        this.resultStripOpen = true
+        this.nativeStatus = result.data && result.data.message ? result.data.message : '视频已保存到相册'
       } else {
         this.nativeStatus = result.errorMessage || '录像停止失败'
       }
     },
+    prepareCameraPermissions() {
+      const nativeCamera = this.resolveNativeCamera()
+      if (nativeCamera && typeof nativeCamera.preparePermissions === 'function') {
+        const result = this.normalizeNativeResult(nativeCamera.preparePermissions(), '权限准备失败')
+        if (result.success && result.data && result.data.message) {
+          this.nativeStatus = result.data.message
+        }
+        return result.success === true
+      }
+      return false
+    },
+    prepareRecordPermissions(silent) {
+      const nativeCamera = this.resolveNativeCamera()
+      if (nativeCamera && typeof nativeCamera.prepareRecordPermissions === 'function') {
+        const rawResult = nativeCamera.prepareRecordPermissions()
+        if (rawResult && rawResult.success === true) {
+          if (rawResult.data && rawResult.data.message && silent !== true) {
+            this.nativeStatus = rawResult.data.message
+          }
+          return true
+        }
+        if (rawResult && rawResult.success === false) {
+          if (silent !== true) {
+            this.nativeStatus = rawResult.errorMessage || '请先完成录像权限授权'
+          }
+          return false
+        }
+        return true
+      }
+      return this.prepareCameraPermissions()
+    },
     restartCamera() {
-      if (this.isRecording) {
-        this.nativeStatus = '录像中不能重启相机'
+      if (this.isRecording || this.stopPending) {
+        this.nativeStatus = this.stopPending ? '请等待视频保存完成' : '录像中不能重启相机'
         return
       }
       const nativeCamera = this.resolveNativeCamera()
@@ -214,8 +301,17 @@ export default {
         this.nativeStatus = result.success ? '相机已重启' : (result.errorMessage || '相机重启失败')
       }
     },
-    toggleResultStrip() {
-      this.resultStripOpen = !this.resultStripOpen
+    retryCameraAfterPermission() {
+      if (this.isRecording || this.stopPending) {
+        return
+      }
+      const nativeCamera = this.resolveNativeCamera()
+      if (nativeCamera && typeof nativeCamera.restartCamera === 'function') {
+        const result = this.normalizeNativeResult(nativeCamera.restartCamera(), '相机重试失败')
+        if (result.success) {
+          this.nativeStatus = '相机已准备'
+        }
+      }
     }
   }
 }
@@ -246,15 +342,29 @@ export default {
   padding-right: 14px;
   flex-direction: row;
   align-items: center;
-  background-color: rgba(0, 0, 0, 0.26);
+  background-color: rgba(255, 255, 255, 0.78);
+}
+
+.topSide {
+  width: 76px;
+  height: 42px;
+  align-items: center;
+  justify-content: center;
 }
 
 .backButton {
   width: 38px;
   height: 38px;
   border-radius: 19px;
-  color: #ffffff;
-  background-color: rgba(0, 0, 0, 0.42);
+  background-color: rgba(255, 255, 255, 0.86);
+  align-items: center;
+  justify-content: center;
+}
+
+.backIcon {
+  width: 38px;
+  height: 38px;
+  color: #111917;
   text-align: center;
   font-size: 29px;
   line-height: 36px;
@@ -264,33 +374,45 @@ export default {
   flex: 1;
   margin-left: 12px;
   margin-right: 12px;
+  align-items: center;
 }
 
 .topTitle {
-  color: #ffffff;
+  width: 200px;
+  color: #111917;
   font-size: 17px;
   font-weight: 800;
+  text-align: center;
   line-height: 23px;
 }
 
 .topSub {
   margin-top: 3px;
-  color: rgba(255, 255, 255, 0.76);
+  width: 200px;
+  color: #31403a;
   font-size: 11px;
+  text-align: center;
   line-height: 16px;
   lines: 1;
 }
 
 .fpsPill {
-  width: 62px;
-  height: 32px;
-  border-radius: 16px;
-  background-color: rgba(0, 0, 0, 0.42);
-  color: #ffffff;
-  font-size: 12px;
+  width: 76px;
+  height: 36px;
+  border-radius: 18px;
+  background-color: rgba(255, 255, 255, 0.9);
+  align-items: center;
+  justify-content: center;
+}
+
+.fpsText {
+  width: 76px;
+  height: 36px;
+  color: #111917;
+  font-size: 15px;
   font-weight: 800;
   text-align: center;
-  line-height: 32px;
+  line-height: 36px;
 }
 
 .recordPill {
@@ -301,6 +423,13 @@ export default {
   height: 28px;
   border-radius: 14px;
   background-color: rgba(0, 0, 0, 0.52);
+  align-items: center;
+  justify-content: center;
+}
+
+.recordText {
+  width: 58px;
+  height: 28px;
   color: #ff5a4f;
   font-size: 12px;
   font-weight: 900;
@@ -315,31 +444,63 @@ export default {
   bottom: 0;
   height: 176px;
   padding: 12px 22px 18px;
-  background-color: #050706;
+  background-color: rgba(245, 248, 246, 0.92);
 }
 
-.modeSwitch {
-  height: 30px;
+.modeSwitchWrap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 12px;
+  height: 36px;
   flex-direction: row;
+  align-items: center;
   justify-content: center;
 }
 
+.modeSwitch {
+  width: 176px;
+  height: 36px;
+  padding: 3px;
+  border-radius: 18px;
+  background-color: rgba(255, 255, 255, 0.72);
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .modeButton {
-  width: 68px;
-  height: 28px;
-  color: rgba(255, 255, 255, 0.62);
+  width: 82px;
+  height: 30px;
+  border-radius: 15px;
+  align-items: center;
+  justify-content: center;
+}
+
+.modeText {
+  width: 82px;
+  height: 30px;
+  color: #59635f;
   font-size: 14px;
   font-weight: 800;
   text-align: center;
-  line-height: 28px;
+  line-height: 30px;
 }
 
 .modeSelected {
-  color: #ffd232;
+  background-color: rgba(255, 255, 255, 0.96);
+}
+
+.modeTextSelected {
+  color: #101614;
 }
 
 .mainControls {
-  margin-top: 12px;
+  position: absolute;
+  left: 22px;
+  right: 22px;
+  top: 62px;
+  height: 88px;
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
@@ -350,7 +511,7 @@ export default {
   width: 58px;
   height: 58px;
   border-radius: 29px;
-  background-color: rgba(255, 255, 255, 0.14);
+  background-color: rgba(255, 255, 255, 0.82);
   align-items: center;
   justify-content: center;
 }
@@ -361,12 +522,14 @@ export default {
   border-radius: 8px;
   border-width: 2px;
   border-style: solid;
-  border-color: #dce4eb;
-  background-color: #26352f;
+  border-color: #28342f;
+  background-color: rgba(39, 52, 47, 0.88);
 }
 
-.cameraButton {
-  color: #ffffff;
+.cameraIcon {
+  width: 58px;
+  height: 58px;
+  color: #111917;
   font-size: 27px;
   font-weight: 900;
   text-align: center;
@@ -377,10 +540,10 @@ export default {
   width: 88px;
   height: 88px;
   border-radius: 44px;
-  background-color: rgba(255, 255, 255, 0.18);
-  border-width: 1px;
+  background-color: rgba(255, 255, 255, 0.94);
+  border-width: 0;
   border-style: solid;
-  border-color: rgba(255, 255, 255, 0.46);
+  border-color: rgba(255, 255, 255, 0);
   align-items: center;
   justify-content: center;
 }
@@ -389,12 +552,13 @@ export default {
   width: 76px;
   height: 76px;
   border-radius: 38px;
-  background-color: #ffffff;
+  background-color: rgba(38, 48, 44, 0.16);
 }
 
 .shutterVideo {
-  border-color: rgba(255, 59, 48, 0.58);
-  background-color: rgba(255, 59, 48, 0.16);
+  border-width: 2px;
+  border-color: rgba(255, 59, 48, 0.72);
+  background-color: rgba(255, 59, 48, 0.2);
 }
 
 .shutterCoreVideo {
@@ -407,31 +571,4 @@ export default {
   border-radius: 10px;
 }
 
-.resultStrip {
-  margin-top: 10px;
-  height: 38px;
-  border-radius: 8px;
-  background-color: #12211b;
-  justify-content: center;
-}
-
-.resultLine {
-  padding-left: 12px;
-  padding-right: 12px;
-  flex-direction: row;
-  align-items: center;
-}
-
-.resultLabel {
-  width: 58px;
-  color: rgba(255, 255, 255, 0.58);
-  font-size: 11px;
-}
-
-.resultText {
-  flex: 1;
-  color: #ffffff;
-  font-size: 11px;
-  lines: 1;
-}
 </style>
