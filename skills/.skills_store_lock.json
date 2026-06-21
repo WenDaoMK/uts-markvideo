@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "skills": {
+    "self-improving-agent": {
+      "name": "self-improving agent",
+      "zip_url": "https://api.skillhub.cn/api/v1/download?slug=self-improving-agent",
+      "source": "community",
+      "version": "3.0.23",
+      "installedAt": "2026-06-21T15:39:22Z"
+    }
+  }
+}

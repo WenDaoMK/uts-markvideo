@@ -1,4 +1,4 @@
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -35,6 +35,25 @@ async function exists(relativePath) {
   } catch {
     return false;
   }
+}
+
+async function collectFiles(relativePath, extensions) {
+  const absolutePath = path.join(root, relativePath);
+  const entries = await readdir(absolutePath, { withFileTypes: true });
+  const files = [];
+
+  for (const entry of entries) {
+    const childPath = path.join(relativePath, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...await collectFiles(childPath, extensions));
+      continue;
+    }
+    if (extensions.includes(path.extname(entry.name))) {
+      files.push(childPath);
+    }
+  }
+
+  return files;
 }
 
 test('project contains the xyc-markvideo cameraX mainline files', async () => {
@@ -130,6 +149,20 @@ test('cameraX nvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.doesNotMatch(page, /@\/uni_modules\/uts-markvideo/);
   assert.doesNotMatch(page, /recordWatermarkVideo/);
   assert.doesNotMatch(page, /setWatermark|clearWatermark|watermarkTemplate|watermarkFrame/);
+});
+
+test('nvue and uts component styles avoid unsupported margin auto centering', async () => {
+  const files = [
+    ...await collectFiles('pages', ['.nvue', '.vue']),
+    ...await collectFiles('uni_modules/xyc-markvideo', ['.nvue', '.vue']),
+  ];
+
+  for (const file of files) {
+    const content = await readFile(path.join(root, file), 'utf8');
+    assert.doesNotMatch(content, /margin-left\s*:\s*auto\s*;/, `${file} must not use margin-left: auto`);
+    assert.doesNotMatch(content, /margin-right\s*:\s*auto\s*;/, `${file} must not use margin-right: auto`);
+    assert.doesNotMatch(content, /margin\s*:\s*auto\s*;/, `${file} must not use margin: auto`);
+  }
 });
 
 test('xyc-markvideo package advertises Android nvue component support only', async () => {
