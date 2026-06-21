@@ -3,16 +3,18 @@
     {
       "path": "pages/index/index",
       "style": {
-        "navigationBarTitleText": "UTS MarkVideo",
+        "navigationBarTitleText": "XYC MarkVideo",
         "navigationBarBackgroundColor": "#f6f7f9",
         "navigationBarTextStyle": "black"
       }
     },
     {
-      "path": "pages/camera/camera",
+      "path": "pages/cameraX/index",
       "style": {
-        "navigationBarTitleText": "内嵌水印相机",
-        "navigationStyle": "custom"
+        "navigationBarTitleText": "XYC 相机",
+        "navigationStyle": "custom",
+        "disableScroll": true,
+        "backgroundColor": "#101614"
       }
     }
   ],
