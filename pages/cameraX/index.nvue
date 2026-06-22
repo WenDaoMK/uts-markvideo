@@ -23,7 +23,7 @@
         :y="watermarkMoveY"
         direction="all"
         :animation="false"
-        :disabled="isRecording || stopPending"
+        :disabled="watermarkMoveDisabled"
         :style="watermarkBoxStyle"
         @touchstart="startWatermarkTouch"
         @touchmove="moveWatermarkTouch"
@@ -47,34 +47,41 @@
               <text v-if="activeWatermark.subtitleText" class="watermarkSubText" :style="watermarkSubTextStyle">{{ activeWatermark.subtitleText }}</text>
             </view>
           </view>
-        </view>
-        <view
-          class="watermarkDelete"
-          :style="watermarkDeleteStyle"
-          @click.stop="clearActiveWatermark"
-          @touchstart.stop="stopWatermarkTouch"
-          @touchmove.stop="stopWatermarkTouch"
-          @touchend.stop="stopWatermarkTouch"
-          @touchcancel.stop="stopWatermarkTouch"
-        >
-          <text class="watermarkDeleteText">×</text>
-        </view>
-        <view
-          class="watermarkRotate"
-          :style="watermarkRotateStyle"
-          @click.stop="rotateWatermarkQuarterTurn"
-          @touchstart.stop="stopWatermarkTouch"
-          @touchmove.stop="stopWatermarkTouch"
-          @touchend.stop="stopWatermarkTouch"
-          @touchcancel.stop="stopWatermarkTouch"
-        >
-          <text class="watermarkRotateText">↻</text>
-        </view>
-        <view
-          class="watermarkResize"
-          :style="watermarkResizeStyle"
-        >
-          <text class="watermarkResizeText">↘</text>
+          <view
+            class="watermarkDelete"
+            :style="watermarkDeleteStyle"
+            @click.stop="clearActiveWatermark"
+            @touchstart.stop="stopWatermarkTouch"
+            @touchmove.stop="stopWatermarkTouch"
+            @touchend.stop="stopWatermarkTouch"
+            @touchcancel.stop="stopWatermarkTouch"
+          >
+            <text class="watermarkDeleteText" :style="watermarkControlTextStyle">×</text>
+          </view>
+          <view
+            class="watermarkRotate"
+            :style="watermarkRotateStyle"
+            @click.stop="rotateWatermarkQuarterTurn"
+            @touchstart.stop="stopWatermarkTouch"
+            @touchmove.stop="stopWatermarkTouch"
+            @touchend.stop="stopWatermarkTouch"
+            @touchcancel.stop="stopWatermarkTouch"
+          >
+            <text class="watermarkRotateText" :style="watermarkControlTextStyle">↻</text>
+          </view>
+          <view
+            class="watermarkResize"
+            :style="watermarkResizeStyle"
+          >
+            <view class="watermarkResizeGlyph" :style="watermarkControlTextStyle">
+              <view class="watermarkResizeTopHorizontal"></view>
+              <view class="watermarkResizeTopVertical"></view>
+              <view class="watermarkResizeTopDiagonal"></view>
+              <view class="watermarkResizeBottomHorizontal"></view>
+              <view class="watermarkResizeBottomVertical"></view>
+              <view class="watermarkResizeBottomDiagonal"></view>
+            </view>
+          </view>
         </view>
       </movable-view>
     </movable-area>
@@ -187,6 +194,7 @@ const WATERMARK_HANDLE_SIZE = 42
 const WATERMARK_HANDLE_INSET = 9
 const WATERMARK_MIN_SCALE = 0.55
 const WATERMARK_ABSOLUTE_MIN_SCALE = 0.28
+const WATERMARK_MAX_SCALE = 2.2
 const WATERMARK_PINCH_MIN_DISTANCE = 8
 const RECORD_STOP_TIMEOUT_MS = 12000
 const PORTRAIT_LAYOUT_FALLBACK_WIDTH = 375
@@ -241,6 +249,7 @@ export default {
       watermarkMoveDraft: null,
       watermarkSyncTimer: null,
       watermarkSyncVersion: 0,
+      watermarkSyncedVersion: -1,
       watermarkMovePosition: {
         x: 0,
         y: 0
@@ -336,13 +345,29 @@ export default {
       }
     },
     watermarkMoveX() {
+      if (this.watermarkPinchActive()) {
+        return 0
+      }
       return this.watermarkMovePosition.x
     },
     watermarkMoveY() {
+      if (this.watermarkPinchActive()) {
+        return 0
+      }
       return this.watermarkMovePosition.y
     },
+    watermarkMoveDisabled() {
+      return this.isRecording || this.stopPending
+    },
     watermarkBoxStyle() {
-      const frame = this.watermarkVisibleFrame()
+      if (this.watermarkPinchActive()) {
+        const editBounds = this.watermarkEditBounds()
+        return {
+          width: Math.round(editBounds.right - editBounds.left) + 'px',
+          height: Math.round(editBounds.bottom - editBounds.top) + 'px'
+        }
+      }
+      const frame = this.watermarkLayoutFrame()
       const metrics = this.watermarkBoxMetrics(frame.width, frame.height, frame.scale, frame.rotation)
       return {
         width: Math.round(metrics.containerWidth) + 'px',
@@ -350,31 +375,50 @@ export default {
       }
     },
     watermarkTransformStyle() {
-      const frame = this.watermarkVisibleFrame()
+      const frame = this.watermarkLayoutFrame()
       const metrics = this.watermarkBoxMetrics(frame.width, frame.height, frame.scale, frame.rotation)
+      const scaleRatio = this.watermarkPinchScaleRatio()
+      if (this.watermarkPinchActive()) {
+        const editBounds = this.watermarkEditBounds()
+        const centerX = frame.left + metrics.contentWidth / 2 - editBounds.left
+        const centerY = frame.top + metrics.contentHeight / 2 - editBounds.top
+        return {
+          left: Math.round(centerX - metrics.boxWidth / 2) + 'px',
+          top: Math.round(centerY - metrics.boxHeight / 2) + 'px',
+          width: Math.round(metrics.boxWidth) + 'px',
+          height: Math.round(metrics.boxHeight) + 'px',
+          transformOrigin: '50% 50%',
+          transform: 'rotate(' + frame.rotation + 'deg) scale(' + scaleRatio + ')'
+        }
+      }
       return {
         left: Math.round(metrics.transformLeft) + 'px',
         top: Math.round(metrics.transformTop) + 'px',
         width: Math.round(metrics.boxWidth) + 'px',
         height: Math.round(metrics.boxHeight) + 'px',
         transformOrigin: '50% 50%',
-        transform: 'rotate(' + frame.rotation + 'deg)'
+        transform: 'rotate(' + frame.rotation + 'deg) scale(' + scaleRatio + ')'
       }
     },
     watermarkRotateStyle() {
-      const frame = this.watermarkVisibleFrame()
-      const metrics = this.watermarkBoxMetrics(frame.width, frame.height, frame.scale, frame.rotation)
-      return this.watermarkControlStyle(metrics.transformLeft + WATERMARK_HANDLE_INSET, metrics.transformTop + WATERMARK_HANDLE_INSET)
+      return this.watermarkControlStyle(WATERMARK_HANDLE_INSET, WATERMARK_HANDLE_INSET)
     },
     watermarkDeleteStyle() {
-      const frame = this.watermarkVisibleFrame()
+      const frame = this.watermarkLayoutFrame()
       const metrics = this.watermarkBoxMetrics(frame.width, frame.height, frame.scale, frame.rotation)
-      return this.watermarkControlStyle(metrics.transformLeft + metrics.boxWidth - WATERMARK_HANDLE_INSET - WATERMARK_HANDLE_SIZE, metrics.transformTop + WATERMARK_HANDLE_INSET)
+      return this.watermarkControlStyle(metrics.boxWidth - WATERMARK_HANDLE_INSET - WATERMARK_HANDLE_SIZE, WATERMARK_HANDLE_INSET)
     },
     watermarkResizeStyle() {
-      const frame = this.watermarkVisibleFrame()
+      const frame = this.watermarkLayoutFrame()
       const metrics = this.watermarkBoxMetrics(frame.width, frame.height, frame.scale, frame.rotation)
-      return this.watermarkControlStyle(metrics.transformLeft + metrics.boxWidth - WATERMARK_HANDLE_INSET - WATERMARK_HANDLE_SIZE, metrics.transformTop + metrics.boxHeight - WATERMARK_HANDLE_INSET - WATERMARK_HANDLE_SIZE)
+      return this.watermarkControlStyle(metrics.boxWidth - WATERMARK_HANDLE_INSET - WATERMARK_HANDLE_SIZE, metrics.boxHeight - WATERMARK_HANDLE_INSET - WATERMARK_HANDLE_SIZE)
+    },
+    watermarkControlTextStyle() {
+      const frame = this.watermarkLayoutFrame()
+      return {
+        transformOrigin: '50% 50%',
+        transform: 'rotate(' + (-frame.rotation) + 'deg)'
+      }
     },
     watermarkContentStyle() {
       if (!this.activeWatermark) {
@@ -395,8 +439,10 @@ export default {
         return {}
       }
       return {
-        width: Math.round(this.activeWatermark.imageWidth * this.watermarkVisibleFrame().scale) + 'px',
-        height: Math.round(this.activeWatermark.imageHeight * this.watermarkVisibleFrame().scale) + 'px'
+        width: Math.round(this.activeWatermark.imageWidth * this.watermarkLayoutFrame().scale) + 'px',
+        height: Math.round(this.activeWatermark.imageHeight * this.watermarkLayoutFrame().scale) + 'px',
+        transformOrigin: '50% 50%',
+        transform: 'scaleY(-1)'
       }
     },
     watermarkMainTextStyle() {
@@ -405,7 +451,7 @@ export default {
       }
       return {
         color: this.activeWatermark.mainTitleColor,
-        fontSize: Math.round(this.activeWatermark.mainTitleFontSize * this.watermarkVisibleFrame().scale) + 'px'
+        fontSize: Math.round(this.activeWatermark.mainTitleFontSize * this.watermarkLayoutFrame().scale) + 'px'
       }
     },
     watermarkSubTextStyle() {
@@ -414,7 +460,7 @@ export default {
       }
       return {
         color: this.activeWatermark.subtitleColor,
-        fontSize: Math.round(this.activeWatermark.subtitleFontSize * this.watermarkVisibleFrame().scale) + 'px'
+        fontSize: Math.round(this.activeWatermark.subtitleFontSize * this.watermarkLayoutFrame().scale) + 'px'
       }
     }
   },
@@ -725,6 +771,7 @@ export default {
         rotation: clamped.rotation
       }
       this.watermarkMovePosition = this.watermarkMovePositionFromFrame()
+      this.watermarkSyncVersion += 1
     },
     clearActiveWatermark() {
       if (this.isRecording || this.stopPending) {
@@ -742,6 +789,7 @@ export default {
       const nativeCamera = this.resolveNativeCamera()
       if (nativeCamera && typeof nativeCamera.clearWatermark === 'function') {
         nativeCamera.clearWatermark()
+        this.watermarkSyncedVersion = this.watermarkSyncVersion
       }
     },
     stopWatermarkTouch() {
@@ -856,8 +904,7 @@ export default {
       }
     },
     async syncWatermarkToNative(showError) {
-      const syncVersion = this.watermarkSyncVersion + 1
-      this.watermarkSyncVersion = syncVersion
+      const syncVersion = this.watermarkSyncVersion
       const nativeCamera = this.resolveNativeCamera()
       if (!nativeCamera || typeof nativeCamera.setWatermark !== 'function') {
         if (showError === true) {
@@ -865,10 +912,14 @@ export default {
         }
         return false
       }
+      if (this.watermarkSyncedVersion === syncVersion) {
+        return true
+      }
       if (!this.activeWatermark) {
         if (typeof nativeCamera.clearWatermark === 'function') {
           nativeCamera.clearWatermark()
         }
+        this.watermarkSyncedVersion = syncVersion
         return true
       }
       const payload = await this.buildNativeWatermarkPayload()
@@ -879,6 +930,9 @@ export default {
         const result = await this.normalizeNativeCommandReturn(await nativeCamera.setWatermark(payload), '水印设置失败', '水印已更新', ['12', '14'])
         if (!result.success && showError === true) {
           this.nativeStatus = result.errorMessage || '水印设置失败'
+        }
+        if (result.success === true) {
+          this.watermarkSyncedVersion = syncVersion
         }
         return result.success === true
       } catch (error) {
@@ -991,18 +1045,30 @@ export default {
         return
       }
       this.commitWatermarkMoveDraft(false)
+      this.clearWatermarkSyncTimer()
       const frame = this.watermarkVisibleFrame()
       const size = this.watermarkContentSize(frame.width, frame.height, frame.scale)
+      const startFrame = {
+        left: frame.left,
+        top: frame.top,
+        width: frame.width,
+        height: frame.height,
+        scale: frame.scale,
+        rotation: frame.rotation
+      }
       this.watermarkMoveActive = false
       this.watermarkMoveDraft = null
       this.watermarkPinchGesture = {
         startDistance: distance,
-        startScale: frame.scale,
+        startScale: startFrame.scale,
         centerX: frame.left + size.width / 2,
         centerY: frame.top + size.height / 2,
-        width: frame.width,
-        height: frame.height,
-        rotation: frame.rotation,
+        width: startFrame.width,
+        height: startFrame.height,
+        rotation: startFrame.rotation,
+        startFrame,
+        previewScaleRatio: 1,
+        commitFrame: null,
         changed: false
       }
     },
@@ -1028,21 +1094,27 @@ export default {
         this.watermarkPinchGesture.width,
         this.watermarkPinchGesture.height
       )
-      this.updateWatermarkFrame({
-        left: clamped.left,
-        top: clamped.top,
-        scale: clamped.scale,
-        rotation: clamped.rotation
-      })
-      this.watermarkPinchGesture.changed = true
-      this.scheduleWatermarkSync()
+      this.watermarkPinchGesture = {
+        ...this.watermarkPinchGesture,
+        previewScaleRatio: clamped.scale / this.watermarkPinchGesture.startScale,
+        commitFrame: {
+          left: clamped.left,
+          top: clamped.top,
+          scale: clamped.scale,
+          rotation: clamped.rotation
+        },
+        changed: true
+      }
     },
     finishWatermarkPinch() {
-      const changed = this.watermarkPinchGesture && this.watermarkPinchGesture.changed === true
+      const gesture = this.watermarkPinchGesture
+      const changed = gesture && gesture.changed === true
+      const commitFrame = gesture ? gesture.commitFrame : null
       this.clearWatermarkPinchGesture()
       this.watermarkMoveActive = false
       this.watermarkMoveDraft = null
-      if (changed) {
+      if (changed && commitFrame) {
+        this.updateWatermarkFrame(commitFrame)
         this.flushWatermarkSync(false)
       }
     },
@@ -1128,8 +1200,45 @@ export default {
         rotation: frame.rotation
       }
     },
+    watermarkPinchActive() {
+      return this.watermarkPinchGesture !== null
+    },
+    watermarkLayoutFrame() {
+      const pinchFrame = this.watermarkPinchPreviewFrame()
+      if (pinchFrame) {
+        return pinchFrame
+      }
+      return this.watermarkVisibleFrame()
+    },
+    watermarkPinchPreviewFrame() {
+      const gesture = this.watermarkPinchGesture
+      if (!gesture || !gesture.startFrame) {
+        return null
+      }
+      if (!gesture.commitFrame) {
+        return gesture.startFrame
+      }
+      return {
+        left: gesture.commitFrame.left,
+        top: gesture.commitFrame.top,
+        width: gesture.startFrame.width,
+        height: gesture.startFrame.height,
+        scale: gesture.commitFrame.scale,
+        rotation: gesture.commitFrame.rotation
+      }
+    },
+    watermarkPinchScaleRatio() {
+      if (this.watermarkPinchGesture && this.watermarkPinchGesture.commitFrame) {
+        return 1
+      }
+      if (this.watermarkPinchGesture && typeof this.watermarkPinchGesture.previewScaleRatio === 'number') {
+        return this.watermarkPinchGesture.previewScaleRatio
+      }
+      return 1
+    },
     watermarkFrameFromMovePosition(moveX, moveY, frame) {
-      const metrics = this.watermarkBoxMetrics(frame.width, frame.height, frame.scale, frame.rotation)
+      const baseFrame = frame || this.watermarkFrame
+      const metrics = this.watermarkBoxMetrics(baseFrame.width, baseFrame.height, baseFrame.scale, baseFrame.rotation)
       const editBounds = this.watermarkEditBounds()
       const nextCenterX = editBounds.left + moveX + metrics.containerWidth / 2
       const nextCenterY = editBounds.top + moveY + metrics.containerHeight / 2
@@ -1251,12 +1360,12 @@ export default {
       const maxScale = this.maxWatermarkScale(left, top, nextRotation, frameWidth, frameHeight)
       const nextScale = this.clampNumber(scale, Math.min(WATERMARK_MIN_SCALE, maxScale), maxScale)
       const size = this.watermarkContentSize(frameWidth, frameHeight, nextScale)
-      const outerBounds = this.watermarkBoxMetrics(frameWidth, frameHeight, nextScale, nextRotation)
+      const contentBounds = this.watermarkRotatedBounds(size.width, size.height, nextRotation)
       const editBounds = this.watermarkEditBounds()
       const centerX = left + size.width / 2
       const centerY = top + size.height / 2
-      const clampedCenterX = this.clampCenterBySize(centerX, editBounds.left, editBounds.right, outerBounds.containerWidth)
-      const clampedCenterY = this.clampCenterBySize(centerY, editBounds.top, editBounds.bottom, outerBounds.containerHeight)
+      const clampedCenterX = this.clampCenterBySize(centerX, editBounds.left, editBounds.right, contentBounds.width)
+      const clampedCenterY = this.clampCenterBySize(centerY, editBounds.top, editBounds.bottom, contentBounds.height)
       return {
         left: clampedCenterX - size.width / 2,
         top: clampedCenterY - size.height / 2,
@@ -1271,10 +1380,15 @@ export default {
         y: this.watermarkFrame.top + size.height / 2
       }
     },
-    watermarkMovePositionFromFrame() {
-      const metrics = this.watermarkBoxMetrics(this.watermarkFrame.width, this.watermarkFrame.height, this.watermarkFrame.scale, this.watermarkFrame.rotation)
+    watermarkMovePositionFromFrame(frame) {
+      const sourceFrame = frame || this.watermarkFrame
+      const metrics = this.watermarkBoxMetrics(sourceFrame.width, sourceFrame.height, sourceFrame.scale, sourceFrame.rotation)
       const editBounds = this.watermarkEditBounds()
-      const center = this.watermarkCenter()
+      const size = this.watermarkContentSize(sourceFrame.width, sourceFrame.height, sourceFrame.scale)
+      const center = {
+        x: sourceFrame.left + size.width / 2,
+        y: sourceFrame.top + size.height / 2
+      }
       return {
         x: roundWatermarkPx(center.x - metrics.containerWidth / 2 - editBounds.left),
         y: roundWatermarkPx(center.y - metrics.containerHeight / 2 - editBounds.top)
@@ -1290,14 +1404,11 @@ export default {
       const editBounds = this.watermarkEditBounds()
       const availableWidth = Math.max(1, editBounds.right - editBounds.left)
       const availableHeight = Math.max(1, editBounds.bottom - editBounds.top)
-      const handleOffset = WATERMARK_HANDLE_PAD * 2 * (cos + sin)
       const rotatedWidthFactor = Math.max(1, frameWidth * cos + frameHeight * sin)
       const rotatedHeightFactor = Math.max(1, frameWidth * sin + frameHeight * cos)
-      const maxWidthScale = (availableWidth - handleOffset) / rotatedWidthFactor
-      const maxHeightScale = (availableHeight - handleOffset) / rotatedHeightFactor
-      const maxBoxWidthScale = (availableWidth - WATERMARK_HANDLE_PAD * 2) / frameWidth
-      const maxBoxHeightScale = (availableHeight - WATERMARK_HANDLE_PAD * 2) / frameHeight
-      return Math.max(WATERMARK_ABSOLUTE_MIN_SCALE, Math.min(2.2, maxWidthScale, maxHeightScale, maxBoxWidthScale, maxBoxHeightScale))
+      const maxWidthScale = availableWidth / rotatedWidthFactor
+      const maxHeightScale = availableHeight / rotatedHeightFactor
+      return Math.max(WATERMARK_ABSOLUTE_MIN_SCALE, Math.min(WATERMARK_MAX_SCALE, maxWidthScale, maxHeightScale))
     },
     clampNumber(value, min, max) {
       if (max < min) {
@@ -1583,6 +1694,9 @@ export default {
       try {
         const stopResponse = await nativeCamera.stopRecord()
         const result = await this.normalizeNativeCommandReturn(stopResponse, '录像停止失败', '视频保存中', ['14'])
+        if (!this.stopPending) {
+          return
+        }
         if (result.success) {
           this.nativeStatus = result.data && result.data.message ? result.data.message : '视频保存中'
           if (this.nativeStatus !== '视频保存中') {
@@ -2002,20 +2116,78 @@ function roundWatermarkPx(value) {
   width: 42px;
   height: 42px;
   border-radius: 21px;
-  background-color: rgba(255, 255, 255, 0.92);
+  background-color: #ff8a00;
   align-items: center;
   justify-content: center;
   z-index: 4;
 }
 
-.watermarkResizeText {
-  width: 42px;
-  height: 42px;
-  color: #111917;
-  font-size: 21px;
-  font-weight: 900;
-  line-height: 42px;
-  text-align: center;
+.watermarkResizeGlyph {
+  position: relative;
+  width: 26px;
+  height: 26px;
+}
+
+.watermarkResizeTopHorizontal {
+  position: absolute;
+  left: 3px;
+  top: 4px;
+  width: 10px;
+  height: 3px;
+  background-color: #ffffff;
+  border-radius: 2px;
+}
+
+.watermarkResizeTopVertical {
+  position: absolute;
+  left: 3px;
+  top: 4px;
+  width: 3px;
+  height: 10px;
+  background-color: #ffffff;
+  border-radius: 2px;
+}
+
+.watermarkResizeTopDiagonal {
+  position: absolute;
+  left: 5px;
+  top: 10px;
+  width: 12px;
+  height: 3px;
+  background-color: #ffffff;
+  border-radius: 2px;
+  transform: rotate(45deg);
+}
+
+.watermarkResizeBottomHorizontal {
+  position: absolute;
+  left: 13px;
+  top: 20px;
+  width: 10px;
+  height: 3px;
+  background-color: #ffffff;
+  border-radius: 2px;
+}
+
+.watermarkResizeBottomVertical {
+  position: absolute;
+  left: 20px;
+  top: 12px;
+  width: 3px;
+  height: 11px;
+  background-color: #ffffff;
+  border-radius: 2px;
+}
+
+.watermarkResizeBottomDiagonal {
+  position: absolute;
+  left: 9px;
+  top: 14px;
+  width: 13px;
+  height: 3px;
+  background-color: #ffffff;
+  border-radius: 2px;
+  transform: rotate(45deg);
 }
 
 .topBar {
