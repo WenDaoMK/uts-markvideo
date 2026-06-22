@@ -64,6 +64,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     private var holderReady = false
     private var currentMode = "photo"
     private var requestedFlashMode = UI_FLASH_OFF
+    private var requestedZoomMode = UI_ZOOM_1X
     private var targetFps = DEFAULT_TARGET_FPS
     private var previewSize = XycSize(1280, 720)
     private var videoSize = XycSize(1280, 720)
@@ -73,6 +74,8 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     private var outputFile: File? = null
     private var cameraPermissionRequested = false
     private var cameraPermissionRetryCount = 0
+    private var recordPermissionRequested = false
+    private var recordPermissionRetryCount = 0
     private var activeWatermark: NativeWatermark? = null
     private var activeWatermarkBitmap: Bitmap? = null
     private var recordingWatermarkSnapshot: NativeWatermark? = null
@@ -113,7 +116,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     }
 
     override fun onDetachedFromWindow() {
-        closeCamera()
+        closeCamera(true)
         ioThread.quitSafely()
         super.onDetachedFromWindow()
     }
@@ -127,9 +130,6 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
 
     fun setMode(mode: String) {
         currentMode = if (mode == "video") "video" else "photo"
-        if (currentMode == "video" && requestedFlashMode == UI_FLASH_AUTO) {
-            requestedFlashMode = UI_FLASH_OFF
-        }
         runOnMain {
             applyFlashModeIfCameraOpen(false)
         }
@@ -148,15 +148,6 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         return runOnMainSync {
             val previousMode = requestedFlashMode
             val normalizedMode = normalizeFlashMode(mode)
-            if (currentMode == "video" && normalizedMode == UI_FLASH_AUTO) {
-                val data = payload()
-                    .put("flashMode", previousMode)
-                    .put("requestedFlashMode", normalizedMode)
-                    .put("applied", false)
-                    .put("message", "视频录像不支持自动闪光")
-                emit("flashchange", data)
-                return@runOnMainSync ok(data)
-            }
             requestedFlashMode = normalizedMode
             val applied = applyFlashModeIfCameraOpen(false)
             if (!applied && requestedFlashMode != UI_FLASH_OFF) {
@@ -169,6 +160,31 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
                 .put("applied", applied)
                 .put("message", if (applied) flashModeMessage(requestedFlashMode) else unsupportedFlashModeMessage(normalizedMode))
             emit("flashchange", data)
+            ok(data)
+        }
+    }
+
+    fun setZoomMode(mode: String): String {
+        return runOnMainSync {
+            val previousMode = requestedZoomMode
+            val normalizedMode = normalizeZoomMode(mode)
+            requestedZoomMode = normalizedMode
+            val applied = applyZoomModeIfCameraOpen(false)
+            if (!applied && requestedZoomMode != UI_ZOOM_1X) {
+                requestedZoomMode = previousMode
+                if (camera == null && holderReady && hasPermission(Manifest.permission.CAMERA)) {
+                    openCameraIfReady()
+                } else {
+                    applyZoomModeIfCameraOpen(false)
+                }
+            }
+            val data = payload()
+                .put("zoomMode", requestedZoomMode)
+                .put("requestedZoomMode", normalizedMode)
+                .put("availableZoomModes", zoomModesPayload(camera?.parameters))
+                .put("applied", applied)
+                .put("message", if (applied) zoomModeMessage(requestedZoomMode) else unsupportedZoomModeMessage(normalizedMode))
+            emit("zoomchange", data)
             ok(data)
         }
     }
@@ -246,12 +262,17 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
                     cameraPermissionRetryCount = 0
                     scheduleCameraPermissionRetry()
                 }
-                requestPermissions(missingPermissions.toTypedArray(), REQUEST_PREPARE_RECORD_PERMISSIONS)
+                requestRecordPermissionsIfNeeded(missingPermissions)
                 return@runOnMainSync failAndEmit(
                     "1003",
                     recordPermissionMessage(missingPermissions),
                     "Missing permissions: ${missingPermissions.joinToString(",")}"
                 )
+            }
+            recordPermissionRequested = false
+            recordPermissionRetryCount = 0
+            if (holderReady && camera == null && hasPermission(Manifest.permission.CAMERA)) {
+                openCameraIfReady()
             }
             ok(payload().put("message", "录像权限已准备"))
         }
@@ -259,7 +280,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
 
     fun destroyCamera(): String {
         return runOnMainSync {
-            closeCamera()
+            closeCamera(true)
             ok(payload())
         }
     }
@@ -356,7 +377,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             }
             val missingPermissions = recordMissingPermissions()
             if (missingPermissions.isNotEmpty()) {
-                requestPermissions(missingPermissions.toTypedArray(), REQUEST_PREPARE_RECORD_PERMISSIONS)
+                requestRecordPermissionsIfNeeded(missingPermissions)
                 return@runOnMainSync failAndEmit(
                     "1003",
                     recordPermissionMessage(missingPermissions),
@@ -528,6 +549,19 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
 
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
+        if (hasWindowFocus && recordPermissionRequested && recordMissingPermissions().isEmpty()) {
+            recordPermissionRequested = false
+            recordPermissionRetryCount = 0
+            if (camera != null) {
+                closeCamera()
+            }
+            if (holderReady && hasPermission(Manifest.permission.CAMERA)) {
+                openCameraIfReady()
+            } else {
+                setStatus("录像权限已准备")
+            }
+            return
+        }
         if (hasWindowFocus && holderReady && camera == null && hasPermission(Manifest.permission.CAMERA)) {
             cameraPermissionRequested = false
             openCameraIfReady()
@@ -550,18 +584,21 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         }
 
         return try {
-            activeCameraId = findBackCameraId()
+            activeCameraId = resolveCameraIdForZoomMode(requestedZoomMode)
             val activeCamera = Camera.open(activeCameraId)
             activeCamera.setDisplayOrientation(resolveCameraRotationDegrees(activeCameraId))
             applyCameraParameters(activeCamera)
             activeCamera.setPreviewDisplay(previewView.holder)
             activeCamera.startPreview()
             camera = activeCamera
+            if (requestedFlashMode != UI_FLASH_OFF) {
+                applyFlashModeIfCameraOpen(false)
+            }
             setStatus("相机已准备")
             emit("cameraready", cameraReadyPayload())
             ok(cameraReadyPayload())
         } catch (throwable: Throwable) {
-            closeCamera()
+            closeCamera(false)
             failAndEmit("1101", "相机设备不可用", throwable.message ?: throwable.javaClass.simpleName)
         }
     }
@@ -588,8 +625,95 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             parameters.setRecordingHint(true)
         } catch (_: Throwable) {
         }
+        applyZoomModeToParameters(parameters, false)
         applyFlashModeToParameters(parameters, false)
         activeCamera.parameters = parameters
+    }
+
+    private fun applyZoomModeIfCameraOpen(failIfUnsupported: Boolean): Boolean {
+        val activeCamera = camera ?: return requestedZoomMode == UI_ZOOM_1X
+        return try {
+            val targetCameraId = resolveCameraIdForZoomMode(requestedZoomMode)
+            if (targetCameraId != activeCameraId) {
+                if (recording || photoBusy) {
+                    if (failIfUnsupported) {
+                        throw IllegalStateException("Cannot switch physical camera while busy.")
+                    }
+                    return false
+                }
+                closeCamera()
+                openCameraIfReady()
+                return camera != null && activeCameraId == targetCameraId
+            }
+            val parameters = activeCamera.parameters
+            if (applyZoomModeToParameters(parameters, failIfUnsupported)) {
+                activeCamera.parameters = parameters
+                true
+            } else {
+                false
+            }
+        } catch (throwable: Throwable) {
+            if (failIfUnsupported) {
+                throw throwable
+            }
+            false
+        }
+    }
+
+    private fun applyZoomModeToParameters(parameters: Camera.Parameters, failIfUnsupported: Boolean): Boolean {
+        if (requestedZoomMode == UI_ZOOM_WIDE) {
+            if (resolveWideBackCameraId() >= 0) {
+                return applyDigitalZoom(parameters, 100, failIfUnsupported)
+            }
+            if (failIfUnsupported) {
+                throw IllegalStateException("Wide camera is not exposed by Camera1.")
+            }
+            return false
+        }
+        val targetRatio = if (requestedZoomMode == UI_ZOOM_2X) 200 else 100
+        return applyDigitalZoom(parameters, targetRatio, failIfUnsupported)
+    }
+
+    private fun applyDigitalZoom(parameters: Camera.Parameters, targetRatio: Int, failIfUnsupported: Boolean): Boolean {
+        if (targetRatio == 100) {
+            if (parameters.isZoomSupported) {
+                parameters.zoom = 0
+            }
+            return true
+        }
+        if (!parameters.isZoomSupported) {
+            if (failIfUnsupported) {
+                throw IllegalStateException("Digital zoom is not supported.")
+            }
+            return false
+        }
+        val ratios = parameters.zoomRatios
+        val maxZoom = parameters.maxZoom
+        if (ratios == null || ratios.isEmpty() || maxZoom <= 0) {
+            if (failIfUnsupported) {
+                throw IllegalStateException("Zoom ratios are not available.")
+            }
+            return false
+        }
+        val maxIndex = min(maxZoom, ratios.size - 1)
+        var bestIndex = 0
+        var bestScore = Int.MAX_VALUE
+        for (index in 0..maxIndex) {
+            val ratio = ratios[index]
+            val score = abs(ratio - targetRatio)
+            if (score < bestScore) {
+                bestScore = score
+                bestIndex = index
+            }
+        }
+        if (ratios[bestIndex] < 190) {
+            if (failIfUnsupported) {
+                throw IllegalStateException("2x zoom is not supported.")
+            }
+            return false
+        }
+        parameters.zoom = bestIndex
+        return true
     }
 
     private fun applyFlashModeIfCameraOpen(failIfUnsupported: Boolean): Boolean {
@@ -598,6 +722,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             val parameters = activeCamera.parameters
             if (applyFlashModeToParameters(parameters, failIfUnsupported)) {
                 activeCamera.parameters = parameters
+                refreshPreviewForFlash(activeCamera)
                 true
             } else {
                 false
@@ -635,20 +760,16 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     private fun resolveNativeFlashMode(supportedModes: List<String>): String? {
         return when (requestedFlashMode) {
             UI_FLASH_ON -> {
-                val preferredMode = if (currentMode == "video") {
-                    Camera.Parameters.FLASH_MODE_TORCH
-                } else {
-                    Camera.Parameters.FLASH_MODE_ON
-                }
                 when {
-                    supportedModes.contains(preferredMode) -> preferredMode
-                    currentMode != "video" && supportedModes.contains(Camera.Parameters.FLASH_MODE_TORCH) ->
+                    supportedModes.contains(Camera.Parameters.FLASH_MODE_TORCH) ->
                         Camera.Parameters.FLASH_MODE_TORCH
+                    currentMode != "video" && supportedModes.contains(Camera.Parameters.FLASH_MODE_ON) ->
+                        Camera.Parameters.FLASH_MODE_ON
                     else -> null
                 }
             }
             UI_FLASH_AUTO -> {
-                if (currentMode != "video" && supportedModes.contains(Camera.Parameters.FLASH_MODE_AUTO)) {
+                if (supportedModes.contains(Camera.Parameters.FLASH_MODE_AUTO)) {
                     Camera.Parameters.FLASH_MODE_AUTO
                 } else {
                     null
@@ -672,11 +793,27 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         }
     }
 
+    private fun normalizeZoomMode(mode: String): String {
+        return when (mode) {
+            UI_ZOOM_WIDE -> UI_ZOOM_WIDE
+            UI_ZOOM_2X -> UI_ZOOM_2X
+            else -> UI_ZOOM_1X
+        }
+    }
+
     private fun flashModeMessage(mode: String): String {
         return when (mode) {
             UI_FLASH_ON -> "闪光灯：开"
             UI_FLASH_AUTO -> "闪光灯：自动"
             else -> "闪光灯：关"
+        }
+    }
+
+    private fun zoomModeMessage(mode: String): String {
+        return when (mode) {
+            UI_ZOOM_WIDE -> "焦段：广角"
+            UI_ZOOM_2X -> "焦段：2x"
+            else -> "焦段：1x"
         }
     }
 
@@ -688,12 +825,24 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         }
     }
 
+    private fun unsupportedZoomModeMessage(mode: String): String {
+        return when (mode) {
+            UI_ZOOM_WIDE -> "当前设备未暴露广角镜头"
+            UI_ZOOM_2X -> "当前设备不支持 2x 焦段"
+            else -> "焦段：1x"
+        }
+    }
+
     private fun validateRecordingFlashMode(activeCamera: Camera): String? {
         if (requestedFlashMode == UI_FLASH_OFF) {
             return null
         }
         if (requestedFlashMode == UI_FLASH_AUTO) {
-            return "视频录像不支持自动闪光"
+            val supportedModes = activeCamera.parameters.supportedFlashModes ?: return "当前设备不支持录像自动闪光"
+            if (!supportedModes.contains(Camera.Parameters.FLASH_MODE_AUTO)) {
+                return "当前设备不支持录像自动闪光"
+            }
+            return null
         }
         val supportedModes = activeCamera.parameters.supportedFlashModes ?: return "当前设备不支持录像闪光灯"
         if (!supportedModes.contains(Camera.Parameters.FLASH_MODE_TORCH)) {
@@ -703,6 +852,14 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             return "录像闪光灯设置失败"
         }
         return null
+    }
+
+    private fun refreshPreviewForFlash(activeCamera: Camera) {
+        try {
+            activeCamera.stopPreview()
+            activeCamera.startPreview()
+        } catch (_: Throwable) {
+        }
     }
 
     private fun applyCaptureOrientation(activeCamera: Camera) {
@@ -834,6 +991,10 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     }
 
     private fun closeCamera() {
+        closeCamera(false)
+    }
+
+    private fun closeCamera(releaseWatermark: Boolean) {
         if (recording) {
             stopVideoFrameLoop()
             try {
@@ -850,8 +1011,11 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         recordingWatermarkBitmap = null
         recordingVideoBurnIn = false
         recordingFrameError = false
-        recycleBitmap(activeWatermarkBitmap)
-        activeWatermarkBitmap = null
+        if (releaseWatermark) {
+            recycleBitmap(activeWatermarkBitmap)
+            activeWatermarkBitmap = null
+            activeWatermark = null
+        }
         reusableVideoFrame?.recycle()
         reusableVideoFrame = null
         try {
@@ -872,6 +1036,10 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     }
 
     private fun findBackCameraId(): Int {
+        return findPrimaryBackCameraId()
+    }
+
+    private fun findPrimaryBackCameraId(): Int {
         val info = Camera.CameraInfo()
         for (cameraIndex in 0 until Camera.getNumberOfCameras()) {
             Camera.getCameraInfo(cameraIndex, info)
@@ -880,6 +1048,20 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             }
         }
         return 0
+    }
+
+    private fun resolveCameraIdForZoomMode(zoomMode: String): Int {
+        if (zoomMode == UI_ZOOM_WIDE) {
+            val wideCameraId = resolveWideBackCameraId()
+            if (wideCameraId >= 0) {
+                return wideCameraId
+            }
+        }
+        return findPrimaryBackCameraId()
+    }
+
+    private fun resolveWideBackCameraId(): Int {
+        return -1
     }
 
     private fun chooseSize(sizes: List<Camera.Size>?): Camera.Size {
@@ -983,7 +1165,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         if (!watermarkRequiresImage(watermark)) {
             return null
         }
-        return decodeWatermarkBitmap(watermark.imagePath)
+        return decodeWatermarkBitmap(watermark.imagePath, false)
             ?: throw IllegalStateException("水印图片资源不可读")
     }
 
@@ -1098,7 +1280,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         var contentLeft = rect.left + padding
         val contentTop = rect.top + padding
         val contentBottom = rect.bottom - padding
-        val imageBitmap = cachedImageBitmap ?: decodeWatermarkBitmap(watermark.imagePath)
+        val imageBitmap = cachedImageBitmap ?: decodeWatermarkBitmap(watermark.imagePath, true)
         val shouldRecycleImageBitmap = cachedImageBitmap == null && imageBitmap != null
         var drewContent = false
         if (watermarkRequiresImage(watermark) && imageBitmap == null) {
@@ -1183,27 +1365,48 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         return Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
     }
 
-    private fun decodeWatermarkBitmap(path: String): Bitmap? {
+    private fun decodeWatermarkBitmap(path: String, allowSearch: Boolean = true): Bitmap? {
         if (path.isBlank()) {
             return null
         }
         val normalizedPath = path.removePrefix("file://")
-        val directFile = File(normalizedPath)
-        if (directFile.exists() && directFile.isFile) {
-            return BitmapFactory.decodeFile(directFile.absolutePath)
+        val assetPrefix = "android_asset/"
+        val assetIndex = normalizedPath.indexOf(assetPrefix)
+        if (assetIndex >= 0) {
+            val assetPath = normalizedPath.substring(assetIndex + assetPrefix.length)
+            decodeWatermarkAsset(assetPath)?.let { return it }
         }
-        if (normalizedPath.startsWith("/static/")) {
-            val relativePath = normalizedPath.removePrefix("/")
+        val candidatePaths = arrayListOf(normalizedPath)
+        if (normalizedPath.startsWith("_www/")) {
+            candidatePaths.add(normalizedPath.removePrefix("_www/"))
+        }
+        if (normalizedPath.startsWith("/_www/")) {
+            candidatePaths.add(normalizedPath.removePrefix("/_www/"))
+        }
+        for (candidatePath in candidatePaths) {
+            val directFile = File(candidatePath)
+            if (directFile.exists() && directFile.isFile) {
+                return BitmapFactory.decodeFile(directFile.absolutePath)
+            }
+        }
+        val relativePath = resolveWatermarkRelativePath(normalizedPath)
+        if (relativePath.isNotBlank()) {
+            decodeWatermarkAsset(relativePath)?.let { return it }
+            if (!allowSearch) {
+                return null
+            }
             val roots = arrayListOf<File>()
             roots.add(File(context.applicationInfo.dataDir, "apps"))
             roots.add(File(context.applicationInfo.dataDir, "www"))
+            roots.add(File(context.applicationInfo.dataDir))
             context.cacheDir.parentFile?.let { roots.add(File(it, "apps")) }
+            context.cacheDir.parentFile?.let { roots.add(it) }
             for (root in roots) {
                 if (!root.exists()) {
                     continue
                 }
                 val matchedFile = root.walkTopDown()
-                    .maxDepth(5)
+                    .maxDepth(8)
                     .firstOrNull { it.isFile && it.path.endsWith(relativePath) }
                 if (matchedFile != null) {
                     return BitmapFactory.decodeFile(matchedFile.absolutePath)
@@ -1211,6 +1414,31 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             }
         }
         return null
+    }
+
+    private fun resolveWatermarkRelativePath(path: String): String {
+        val trimmedPath = path.trim()
+        if (trimmedPath.startsWith("/static/")) {
+            return trimmedPath.removePrefix("/")
+        }
+        if (trimmedPath.startsWith("static/")) {
+            return trimmedPath
+        }
+        val staticIndex = trimmedPath.indexOf("/static/")
+        if (staticIndex >= 0) {
+            return trimmedPath.substring(staticIndex + 1)
+        }
+        return ""
+    }
+
+    private fun decodeWatermarkAsset(relativePath: String): Bitmap? {
+        return try {
+            context.assets.open(relativePath).use { input ->
+                BitmapFactory.decodeStream(input)
+            }
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     private fun ellipsizeText(text: String, paint: Paint, maxWidth: Float): String {
@@ -1267,11 +1495,29 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             .put("message", "相机已准备")
             .put("mode", currentMode)
             .put("flashMode", requestedFlashMode)
+            .put("zoomMode", requestedZoomMode)
+            .put("availableZoomModes", zoomModesPayload(camera?.parameters))
             .put("fps", targetFps)
             .put("previewWidth", previewSize.width)
             .put("previewHeight", previewSize.height)
             .put("videoWidth", videoSize.width)
             .put("videoHeight", videoSize.height)
+    }
+
+    private fun zoomModesPayload(parameters: Camera.Parameters?): org.json.JSONArray {
+        val modes = org.json.JSONArray()
+        modes.put(UI_ZOOM_1X)
+        if (resolveWideBackCameraId() >= 0) {
+            modes.put(UI_ZOOM_WIDE)
+        }
+        if (parameters != null && parameters.isZoomSupported) {
+            val ratios = parameters.zoomRatios ?: emptyList()
+            val maxZoom = parameters.maxZoom
+            if (maxZoom > 0 && ratios.any { it >= 200 }) {
+                modes.put(UI_ZOOM_2X)
+            }
+        }
+        return modes
     }
 
     private fun mediaPayload(tempFilePath: String, durationMs: Long, width: Int, height: Int): org.json.JSONObject {
@@ -1477,6 +1723,14 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         scheduleCameraPermissionRetry()
     }
 
+    private fun requestRecordPermissionsIfNeeded(missingPermissions: ArrayList<String>) {
+        if (recordPermissionRequested) return
+        recordPermissionRequested = true
+        recordPermissionRetryCount = 0
+        requestPermissions(missingPermissions.toTypedArray(), REQUEST_PREPARE_RECORD_PERMISSIONS)
+        scheduleRecordPermissionRetry()
+    }
+
     private fun requestPermissions(permissions: Array<String>, requestCode: Int) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || permissions.isEmpty()) return
         val activity = findActivity(context) ?: return
@@ -1498,6 +1752,31 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
                 cameraPermissionRetryCount += 1
                 if (cameraPermissionRetryCount < CAMERA_PERMISSION_RETRY_LIMIT) {
                     scheduleCameraPermissionRetry()
+                }
+            }
+        }
+        mainHandler.postDelayed(retryRunnable, CAMERA_PERMISSION_RETRY_DELAY_MS)
+    }
+
+    private fun scheduleRecordPermissionRetry() {
+        val retryRunnable = object : Runnable {
+            override fun run() {
+                if (!recordPermissionRequested) {
+                    return
+                }
+                if (recordMissingPermissions().isEmpty()) {
+                    recordPermissionRequested = false
+                    recordPermissionRetryCount = 0
+                    if (holderReady && camera == null && hasPermission(Manifest.permission.CAMERA)) {
+                        openCameraIfReady()
+                    } else {
+                        setStatus("录像权限已准备")
+                    }
+                    return
+                }
+                recordPermissionRetryCount += 1
+                if (recordPermissionRetryCount < CAMERA_PERMISSION_RETRY_LIMIT) {
+                    scheduleRecordPermissionRetry()
                 }
             }
         }
@@ -1745,6 +2024,12 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
                 activeEncoder?.release()
                 videoEncoder = null
                 synchronized(muxerLock) {
+                    try {
+                        if (muxerStarted) {
+                            muxer?.stop()
+                        }
+                    } catch (_: Throwable) {
+                    }
                     try {
                         muxer?.release()
                     } catch (_: Throwable) {
@@ -2047,6 +2332,9 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         const val UI_FLASH_OFF = "off"
         const val UI_FLASH_ON = "on"
         const val UI_FLASH_AUTO = "auto"
+        const val UI_ZOOM_WIDE = "wide"
+        const val UI_ZOOM_1X = "1x"
+        const val UI_ZOOM_2X = "2x"
         const val REQUEST_CAMERA_PERMISSION = 7201
         const val REQUEST_PREPARE_PHOTO_PERMISSIONS = 7203
         const val REQUEST_PREPARE_PERMISSIONS = 7204

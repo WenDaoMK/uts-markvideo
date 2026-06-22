@@ -16,6 +16,7 @@
       'recordstart',
       'recorddone',
       'flashchange',
+      'zoomchange',
       'shuttertap',
       'modechange'
     ],
@@ -65,7 +66,7 @@
         immediate: false
       }
     },
-    expose: ['setStatus', 'switchMode', 'setFlashMode', 'setWatermark', 'clearWatermark', 'takePhoto', 'startRecord', 'stopRecord', 'restartCamera', 'preparePermissions', 'prepareRecordPermissions', 'destroyCamera'],
+    expose: ['setStatus', 'switchMode', 'setFlashMode', 'setZoomMode', 'setWatermark', 'clearWatermark', 'takePhoto', 'startRecord', 'stopRecord', 'restartCamera', 'preparePermissions', 'prepareRecordPermissions', 'destroyCamera'],
     methods: {
       emitNativeEvent(eventName : string, payload : any) {
         if (eventName == 'cameraready') {
@@ -90,6 +91,10 @@
         }
         if (eventName == 'flashchange') {
           this.$emit('flashchange', payload);
+          return;
+        }
+        if (eventName == 'zoomchange') {
+          this.$emit('zoomchange', payload);
         }
       },
       resolveCameraView() : XycNativeCameraView | null {
@@ -131,6 +136,13 @@
           return nativeViewUnavailable();
         }
         return view.setFlashMode(mode);
+      },
+      setZoomMode(mode : string) : string {
+        const view = this.requireCameraView();
+        if (view == null) {
+          return nativeViewUnavailable();
+        }
+        return view.setZoomMode(mode);
       },
       setWatermark(template : any) : string {
         const view = this.requireCameraView();

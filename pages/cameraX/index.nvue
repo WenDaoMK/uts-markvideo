@@ -13,6 +13,7 @@
       @recordstart="handleRecordStart"
       @recorddone="handleRecordDone"
       @flashchange="handleFlashChange"
+      @zoomchange="handleZoomChange"
       @modechange="handleNativeMode"
       @shuttertap="handleNativeShutter"
     />
@@ -26,7 +27,14 @@
         @touchend.stop="finishWatermarkEdit"
         @touchcancel.stop="finishWatermarkEdit"
       >
-        <cover-view class="watermarkContent" :style="watermarkContentStyle">
+        <cover-view
+          class="watermarkContent"
+          :style="watermarkContentStyle"
+          @touchstart.stop="startWatermarkDrag"
+          @touchmove.stop="moveWatermark"
+          @touchend.stop="finishWatermarkEdit"
+          @touchcancel.stop="finishWatermarkEdit"
+        >
           <cover-image
             v-if="watermarkHasImage"
             class="watermarkImage"
@@ -38,6 +46,14 @@
             <text v-if="activeWatermark.subtitleText" class="watermarkSubText" :style="watermarkSubTextStyle">{{ activeWatermark.subtitleText }}</text>
           </cover-view>
         </cover-view>
+        <cover-view
+          class="watermarkDragHotspot"
+          @touchstart.stop="startWatermarkDrag"
+          @touchmove.stop="moveWatermark"
+          @touchend.stop="finishWatermarkEdit"
+          @touchcancel.stop="finishWatermarkEdit"
+          @longpress.stop="startWatermarkDrag"
+        ></cover-view>
         <cover-view
           class="watermarkDelete"
           @click.stop="clearActiveWatermark"
@@ -55,7 +71,13 @@
           @touchend.stop="finishWatermarkEdit"
           @touchcancel.stop="finishWatermarkEdit"
         >
-          <text class="watermarkResizeText">↔</text>
+          <text
+            class="watermarkResizeText"
+            @touchstart.stop="startWatermarkResize"
+            @touchmove.stop="moveWatermark"
+            @touchend.stop="finishWatermarkEdit"
+            @touchcancel.stop="finishWatermarkEdit"
+          >↻</text>
         </cover-view>
       </cover-view>
     </cover-view>
@@ -87,6 +109,18 @@
       <cover-view class="recordBubble">
         <cover-view :class="recordDotClass"></cover-view>
         <text class="recordHudText">{{ recordElapsedText }}</text>
+      </cover-view>
+    </cover-view>
+
+    <cover-view class="zoomRail">
+      <cover-view :class="wideZoomButtonClass" @click="setZoomMode('wide')">
+        <text :class="wideZoomTextClass">广角</text>
+      </cover-view>
+      <cover-view :class="normalZoomButtonClass" @click="setZoomMode('1x')">
+        <text :class="normalZoomTextClass">1x</text>
+      </cover-view>
+      <cover-view :class="teleZoomButtonClass" @click="setZoomMode('2x')">
+        <text :class="teleZoomTextClass">2x</text>
       </cover-view>
     </cover-view>
 
@@ -165,6 +199,11 @@ export default {
       flashRequestSilent: false,
       flashEventHandled: false,
       flashEventApplied: true,
+      zoomMode: '1x',
+      zoomPending: false,
+      zoomRequestSilent: false,
+      zoomEventHandled: false,
+      zoomEventApplied: true,
       nativeStatus: '相机初始化中',
       nativeReady: false,
       isRecording: false,
@@ -173,6 +212,10 @@ export default {
       recordElapsedMs: 0,
       recordBlinkOn: true,
       recordTimer: null,
+      recordPermissionRetryTimer: null,
+      recordStartRetryTimer: null,
+      recordPermissionRetryCount: 0,
+      recordStartAfterPermission: false,
       showWatermarkSheet: false,
       watermarkTemplates: createWatermarkTemplates(),
       activeWatermark: null,
@@ -185,6 +228,7 @@ export default {
         rotation: 0
       },
       watermarkGesture: null,
+      watermarkGestureTimer: null,
       watermarkSyncVersion: 0,
       screenWidth: screen.width,
       previewHeight: screen.height
@@ -220,6 +264,24 @@ export default {
         return '自动'
       }
       return '关'
+    },
+    wideZoomButtonClass() {
+      return this.zoomMode === 'wide' ? ['zoomButton', 'zoomButtonSelected'] : ['zoomButton']
+    },
+    normalZoomButtonClass() {
+      return this.zoomMode === '1x' ? ['zoomButton', 'zoomButtonSelected'] : ['zoomButton']
+    },
+    teleZoomButtonClass() {
+      return this.zoomMode === '2x' ? ['zoomButton', 'zoomButtonSelected'] : ['zoomButton']
+    },
+    wideZoomTextClass() {
+      return this.zoomMode === 'wide' ? ['zoomText', 'zoomTextSelected'] : ['zoomText']
+    },
+    normalZoomTextClass() {
+      return this.zoomMode === '1x' ? ['zoomText', 'zoomTextSelected'] : ['zoomText']
+    },
+    teleZoomTextClass() {
+      return this.zoomMode === '2x' ? ['zoomText', 'zoomTextSelected'] : ['zoomText']
     },
     shutterClass() {
       const classes = ['shutter']
@@ -318,18 +380,27 @@ export default {
         this.retryCameraAfterPermission()
       }, 250)
     }
+    if (this.recordStartAfterPermission) {
+      this.scheduleRecordPermissionRetry()
+    }
   },
   onUnload() {
     if (this.recordTimer !== null) {
       clearInterval(this.recordTimer)
       this.recordTimer = null
     }
+    this.clearRecordPermissionRetry()
+    this.clearRecordStartRetry()
+    this.clearWatermarkGestureTimer()
   },
   beforeDestroy() {
     if (this.recordTimer !== null) {
       clearInterval(this.recordTimer)
       this.recordTimer = null
     }
+    this.clearRecordPermissionRetry()
+    this.clearRecordStartRetry()
+    this.clearWatermarkGestureTimer()
   },
   methods: {
     resolveNativeCamera() {
@@ -394,6 +465,10 @@ export default {
       if (!flashApplied) {
         this.flashMode = 'off'
       }
+      const zoomApplied = await this.syncZoomMode(this.zoomMode, true)
+      if (!zoomApplied) {
+        this.zoomMode = detail.zoomMode || '1x'
+      }
       this.syncWatermarkToNative(false)
       setTimeout(() => {
         this.prepareRecordPermissions(true)
@@ -402,6 +477,9 @@ export default {
     handleNativeError(event) {
       const detail = this.eventDetail(event)
       if (detail && detail.errorCode === '1501') {
+        return
+      }
+      if (detail && detail.errorCode === '1003' && this.recordStartAfterPermission) {
         return
       }
       if (this.stopPending && detail && detail.errorCode && detail.errorCode.indexOf('14') === 0) {
@@ -449,12 +527,31 @@ export default {
       this.flashEventHandled = true
       this.flashEventApplied = detail.applied !== false
       this.flashRequestSilent = false
-      if (detail.flashMode) {
-        this.flashMode = detail.flashMode
-      }
       if (detail.applied === false && detail.requestedFlashMode !== 'off') {
         this.nativeStatus = detail.message || '当前设备不支持该闪光灯模式'
         return
+      }
+      if (detail.flashMode) {
+        this.flashMode = detail.flashMode
+      }
+      if (silent !== true && detail.message) {
+        this.nativeStatus = detail.message
+      }
+    },
+    handleZoomChange(event) {
+      const detail = this.eventDetail(event)
+      const silent = this.zoomRequestSilent === true
+      this.zoomEventHandled = true
+      this.zoomEventApplied = detail.applied !== false
+      this.zoomRequestSilent = false
+      if (detail.applied === false && detail.requestedZoomMode) {
+        if (silent !== true) {
+          this.nativeStatus = detail.message || '当前设备不支持该焦段'
+        }
+        return
+      }
+      if (detail.zoomMode) {
+        this.zoomMode = detail.zoomMode
       }
       if (silent !== true && detail.message) {
         this.nativeStatus = detail.message
@@ -506,6 +603,7 @@ export default {
         this.nativeStatus = '录像中不能编辑水印'
         return
       }
+      this.clearWatermarkGestureTimer()
       this.watermarkGesture = null
       this.watermarkSyncVersion += 1
       this.activeWatermark = null
@@ -593,13 +691,20 @@ export default {
         this.nativeStatus = '录像中不能编辑水印'
         return
       }
+      if (this.watermarkGesture && this.watermarkGesture.type === 'drag') {
+        return
+      }
       const point = this.touchPoint(event)
+      this.clearWatermarkGestureTimer()
       this.watermarkGesture = {
         type: 'drag',
         startX: point.x,
         startY: point.y,
+        currentX: point.x,
+        currentY: point.y,
         left: this.watermarkFrame.left,
-        top: this.watermarkFrame.top
+        top: this.watermarkFrame.top,
+        changed: false
       }
     },
     startWatermarkResize(event) {
@@ -609,6 +714,7 @@ export default {
       }
       const point = this.touchPoint(event)
       const center = this.watermarkCenter()
+      this.clearWatermarkGestureTimer()
       this.watermarkGesture = {
         type: 'resize',
         centerX: center.x,
@@ -616,14 +722,17 @@ export default {
         distance: Math.max(1, distanceBetween(point.x, point.y, center.x, center.y)),
         angle: angleBetween(point.x, point.y, center.x, center.y),
         scale: this.watermarkFrame.scale,
-        rotation: this.watermarkFrame.rotation
+        rotation: this.watermarkFrame.rotation,
+        currentX: point.x,
+        currentY: point.y,
+        changed: false
       }
     },
     moveWatermark(event) {
       if (!this.watermarkGesture || !this.activeWatermark || this.isRecording || this.stopPending) {
         return
       }
-      const point = this.touchPoint(event)
+      const point = this.gesturePoint(event)
       if (this.watermarkGesture.type === 'drag') {
         const nextLeft = this.watermarkGesture.left + point.x - this.watermarkGesture.startX
         const nextTop = this.watermarkGesture.top + point.y - this.watermarkGesture.startY
@@ -631,28 +740,135 @@ export default {
         const scaledHeight = Math.max(1, this.watermarkFrame.height * this.watermarkFrame.scale)
         this.watermarkFrame.left = this.clampNumber(nextLeft, 8, this.screenWidth - scaledWidth - 8)
         this.watermarkFrame.top = this.clampNumber(nextTop, 96, this.previewHeight - scaledHeight - 190)
+        this.watermarkGesture.changed = true
         return
       }
       if (this.watermarkGesture.type === 'resize') {
         const nextDistance = Math.max(1, distanceBetween(point.x, point.y, this.watermarkGesture.centerX, this.watermarkGesture.centerY))
         const nextAngle = angleBetween(point.x, point.y, this.watermarkGesture.centerX, this.watermarkGesture.centerY)
-        this.watermarkFrame.scale = this.clampNumber(this.watermarkGesture.scale * (nextDistance / this.watermarkGesture.distance), 0.55, 2.2)
+        const nextScale = this.clampNumber(this.watermarkGesture.scale * (nextDistance / this.watermarkGesture.distance), 0.55, 2.2)
+        const scaledWidth = Math.max(1, this.watermarkFrame.width * nextScale)
+        const scaledHeight = Math.max(1, this.watermarkFrame.height * nextScale)
+        this.watermarkFrame.scale = nextScale
         this.watermarkFrame.rotation = normalizeRotation(this.watermarkGesture.rotation + nextAngle - this.watermarkGesture.angle)
+        this.watermarkFrame.left = this.clampNumber(this.watermarkGesture.centerX - scaledWidth / 2, 8, this.screenWidth - scaledWidth - 8)
+        this.watermarkFrame.top = this.clampNumber(this.watermarkGesture.centerY - scaledHeight / 2, 96, this.previewHeight - scaledHeight - 190)
+        this.watermarkGesture.changed = true
+      }
+    },
+    gesturePoint(event) {
+      const point = this.touchPoint(event)
+      if (!(point.x === 0 && point.y === 0)) {
+        this.watermarkGesture.currentX = point.x
+        this.watermarkGesture.currentY = point.y
+        return point
+      }
+      const delta = this.touchDelta(event)
+      const currentX = typeof this.watermarkGesture.currentX === 'number' ? this.watermarkGesture.currentX : this.watermarkGesture.startX
+      const currentY = typeof this.watermarkGesture.currentY === 'number' ? this.watermarkGesture.currentY : this.watermarkGesture.startY
+      this.watermarkGesture.currentX = currentX + delta.x
+      this.watermarkGesture.currentY = currentY + delta.y
+      return {
+        x: this.watermarkGesture.currentX,
+        y: this.watermarkGesture.currentY
       }
     },
     finishWatermarkEdit() {
       if (!this.watermarkGesture) {
         return
       }
+      const changed = this.watermarkGesture.changed === true
+      this.clearWatermarkGestureTimer()
       this.watermarkGesture = null
-      this.syncWatermarkToNative(false)
+      if (changed) {
+        this.syncWatermarkToNative(false)
+      }
+    },
+    touchDelta(event) {
+      const detail = event && event.detail ? event.detail : {}
+      return {
+        x: this.pickDeltaNumber(detail, ['dx', 'deltaX', 'movementX']),
+        y: this.pickDeltaNumber(detail, ['dy', 'deltaY', 'movementY'])
+      }
+    },
+    pickDeltaNumber(source, names) {
+      for (let i = 0; i < names.length; i += 1) {
+        const value = source ? source[names[i]] : null
+        if (typeof value === 'number') {
+          return value
+        }
+        if (typeof value === 'string' && value.length > 0) {
+          const numberValue = parseFloat(value)
+          if (!isNaN(numberValue)) {
+            return numberValue
+          }
+        }
+      }
+      return 0
     },
     touchPoint(event) {
-      const touches = event && event.touches ? event.touches : []
-      const touch = touches.length > 0 ? touches[0] : {}
+      const touch = this.pickTouchSource(event)
       return {
-        x: touch.pageX || touch.clientX || 0,
-        y: touch.pageY || touch.clientY || 0
+        x: this.pickTouchNumber(touch, event, ['pageX', 'clientX', 'screenX', 'x']),
+        y: this.pickTouchNumber(touch, event, ['pageY', 'clientY', 'screenY', 'y'])
+      }
+    },
+    pickTouchSource(event) {
+      const groups = []
+      if (event && event.touches) {
+        groups.push(event.touches)
+      }
+      if (event && event.changedTouches) {
+        groups.push(event.changedTouches)
+      }
+      if (event && event.detail && event.detail.touches) {
+        groups.push(event.detail.touches)
+      }
+      if (event && event.detail && event.detail.changedTouches) {
+        groups.push(event.detail.changedTouches)
+      }
+      for (let i = 0; i < groups.length; i += 1) {
+        const group = groups[i]
+        if (group && group.length > 0) {
+          return group[0]
+        }
+      }
+      return event && event.detail ? event.detail : (event || {})
+    },
+    pickTouchNumber(touch, event, names) {
+      for (let i = 0; i < names.length; i += 1) {
+        const name = names[i]
+        const value = touch ? touch[name] : null
+        if (typeof value === 'number') {
+          return value
+        }
+        if (typeof value === 'string' && value.length > 0) {
+          const numberValue = parseFloat(value)
+          if (!isNaN(numberValue)) {
+            return numberValue
+          }
+        }
+      }
+      const detail = event && event.detail ? event.detail : {}
+      for (let i = 0; i < names.length; i += 1) {
+        const name = names[i]
+        const value = detail[name]
+        if (typeof value === 'number') {
+          return value
+        }
+        if (typeof value === 'string' && value.length > 0) {
+          const numberValue = parseFloat(value)
+          if (!isNaN(numberValue)) {
+            return numberValue
+          }
+        }
+      }
+      return 0
+    },
+    clearWatermarkGestureTimer() {
+      if (this.watermarkGestureTimer !== null) {
+        clearTimeout(this.watermarkGestureTimer)
+        this.watermarkGestureTimer = null
       }
     },
     watermarkCenter() {
@@ -697,11 +913,10 @@ export default {
         this.nativeStatus = this.stopPending ? '请等待视频保存完成' : '录像中不能切换模式'
         return
       }
-      const shouldResetFlash = mode === 'video' && this.flashMode === 'auto'
+      this.recordStartAfterPermission = false
+      this.clearRecordPermissionRetry()
+      this.clearRecordStartRetry()
       this.mode = mode
-      if (shouldResetFlash) {
-        this.flashMode = 'off'
-      }
       const nativeCamera = this.resolveNativeCamera()
       if (nativeCamera && typeof nativeCamera.switchMode === 'function') {
         nativeCamera.switchMode(mode)
@@ -758,6 +973,7 @@ export default {
           return true
         }
         const result = this.normalizeNativeResult(nativeResponse, '闪光灯设置失败')
+        this.flashRequestSilent = false
         if (!result.success) {
           this.nativeStatus = result.errorMessage || '闪光灯设置失败'
           return false
@@ -771,14 +987,12 @@ export default {
         }
         return true
       } catch (error) {
+        this.flashRequestSilent = false
         this.nativeStatus = error && error.message ? error.message : '闪光灯设置失败'
         return false
       }
     },
     nextFlashMode(currentFlashMode) {
-      if (this.mode === 'video') {
-        return currentFlashMode === 'off' ? 'on' : 'off'
-      }
       return currentFlashMode === 'off' ? 'on' : (currentFlashMode === 'on' ? 'auto' : 'off')
     },
     flashModeLabel(mode) {
@@ -789,6 +1003,88 @@ export default {
         return '闪光灯：自动'
       }
       return '闪光灯：关'
+    },
+    async setZoomMode(mode) {
+      if (this.zoomPending || mode === this.zoomMode) {
+        return
+      }
+      if (this.stopPending) {
+        this.nativeStatus = '请等待视频保存完成'
+        return
+      }
+      const currentZoomMode = this.zoomMode
+      this.zoomPending = true
+      this.nativeStatus = '焦段切换中'
+      try {
+        const applied = await this.syncZoomMode(mode, false)
+        if (!applied) {
+          this.zoomMode = currentZoomMode
+        }
+      } finally {
+        this.zoomPending = false
+      }
+    },
+    async syncZoomMode(mode, silent) {
+      const nativeCamera = this.resolveNativeCamera()
+      if (!nativeCamera || typeof nativeCamera.setZoomMode !== 'function') {
+        if (silent !== true) {
+          this.nativeStatus = '原生焦段接口不可用'
+        }
+        return false
+      }
+      try {
+        this.zoomEventHandled = false
+        this.zoomEventApplied = true
+        this.zoomRequestSilent = silent === true
+        const nativeResponse = await nativeCamera.setZoomMode(mode)
+        if (typeof nativeResponse === 'number' || nativeResponse === null || nativeResponse === undefined) {
+          const eventHandled = this.zoomEventHandled === true
+          const eventApplied = this.zoomEventApplied === true
+          this.zoomRequestSilent = false
+          if (eventHandled) {
+            return eventApplied
+          }
+          if (silent !== true) {
+            this.nativeStatus = this.zoomModeLabel(mode)
+          }
+          this.zoomMode = mode
+          return true
+        }
+        const result = this.normalizeNativeResult(nativeResponse, '焦段切换失败')
+        this.zoomRequestSilent = false
+        if (!result.success) {
+          if (silent !== true) {
+            this.nativeStatus = result.errorMessage || '焦段切换失败'
+          }
+          return false
+        }
+        if (result.data && result.data.applied === false) {
+          if (silent !== true) {
+            this.nativeStatus = result.data.message || '当前设备不支持该焦段'
+          }
+          return false
+        }
+        this.zoomMode = result.data && result.data.zoomMode ? result.data.zoomMode : mode
+        if (silent !== true) {
+          this.nativeStatus = result.data && result.data.message ? result.data.message : this.zoomModeLabel(this.zoomMode)
+        }
+        return true
+      } catch (error) {
+        this.zoomRequestSilent = false
+        if (silent !== true) {
+          this.nativeStatus = error && error.message ? error.message : '焦段切换失败'
+        }
+        return false
+      }
+    },
+    zoomModeLabel(mode) {
+      if (mode === 'wide') {
+        return '焦段：广角'
+      }
+      if (mode === '2x') {
+        return '焦段：2x'
+      }
+      return '焦段：1x'
     },
     async pressShutter() {
       const nativeCamera = this.resolveNativeCamera()
@@ -823,8 +1119,12 @@ export default {
           return
         }
         if (!this.prepareRecordPermissions()) {
+          this.recordStartAfterPermission = true
+          this.scheduleRecordPermissionRetry()
           return
         }
+        this.recordStartAfterPermission = false
+        this.clearRecordPermissionRetry()
         if (this.activeWatermark && !await this.syncWatermarkToNative(true)) {
           return
         }
@@ -893,6 +1193,59 @@ export default {
       this.recordElapsedMs = 0
       this.recordBlinkOn = true
     },
+    clearRecordPermissionRetry() {
+      if (this.recordPermissionRetryTimer !== null) {
+        clearTimeout(this.recordPermissionRetryTimer)
+        this.recordPermissionRetryTimer = null
+      }
+      this.recordPermissionRetryCount = 0
+    },
+    clearRecordStartRetry() {
+      if (this.recordStartRetryTimer !== null) {
+        clearTimeout(this.recordStartRetryTimer)
+        this.recordStartRetryTimer = null
+      }
+    },
+    scheduleRecordPermissionRetry() {
+      if (!this.recordStartAfterPermission || this.recordPermissionRetryTimer !== null) {
+        return
+      }
+      const nativeCamera = this.resolveNativeCamera()
+      if (!nativeCamera || typeof nativeCamera.prepareRecordPermissions !== 'function') {
+        return
+      }
+      this.recordPermissionRetryTimer = setTimeout(() => {
+        this.recordPermissionRetryTimer = null
+        if (!this.recordStartAfterPermission || this.isRecording || this.stopPending || this.mode !== 'video') {
+          this.clearRecordPermissionRetry()
+          this.recordStartAfterPermission = false
+          return
+        }
+        this.recordPermissionRetryCount += 1
+        const ready = this.prepareRecordPermissions(true)
+        if (ready) {
+          this.clearRecordPermissionRetry()
+          this.recordStartAfterPermission = false
+          this.retryCameraAfterPermission()
+          this.nativeStatus = '录像权限已准备，正在开始录像'
+          this.clearRecordStartRetry()
+          this.recordStartRetryTimer = setTimeout(() => {
+            this.recordStartRetryTimer = null
+            if (!this.isRecording && !this.stopPending && this.recordStartAfterPermission === false && this.mode === 'video') {
+              this.pressShutter()
+            }
+          }, 180)
+          return
+        }
+        if (this.recordPermissionRetryCount < 80) {
+          this.scheduleRecordPermissionRetry()
+          return
+        }
+        this.clearRecordPermissionRetry()
+        this.recordStartAfterPermission = false
+        this.nativeStatus = '请先完成录像权限授权'
+      }, 350)
+    },
     prepareCameraPermissions() {
       const nativeCamera = this.resolveNativeCamera()
       if (nativeCamera && typeof nativeCamera.preparePermissions === 'function') {
@@ -909,6 +1262,7 @@ export default {
       if (nativeCamera && typeof nativeCamera.prepareRecordPermissions === 'function') {
         const result = this.normalizeNativeResult(nativeCamera.prepareRecordPermissions(), '请先完成录像权限授权')
         if (result.success === true) {
+          this.clearRecordPermissionRetry()
           if (result.data && result.data.message && silent !== true) {
             this.nativeStatus = result.data.message
           }
@@ -1103,6 +1457,17 @@ function normalizeRotation(rotation) {
   flex-direction: row;
   align-items: center;
   justify-content: center;
+  z-index: 1;
+}
+
+.watermarkDragHotspot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(255, 255, 255, 0.01);
+  z-index: 2;
 }
 
 .watermarkImage {
@@ -1129,7 +1494,7 @@ function normalizeRotation(rotation) {
 
 .watermarkDelete {
   position: absolute;
-  left: -1px;
+  right: -1px;
   top: -1px;
   width: 34px;
   height: 34px;
@@ -1137,6 +1502,7 @@ function normalizeRotation(rotation) {
   background-color: #ff4b42;
   align-items: center;
   justify-content: center;
+  z-index: 3;
 }
 
 .watermarkDeleteText {
@@ -1151,23 +1517,24 @@ function normalizeRotation(rotation) {
 
 .watermarkResize {
   position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 30px;
-  height: 30px;
-  border-radius: 15px;
+  right: 0;
+  bottom: 0;
+  width: 54px;
+  height: 54px;
+  border-radius: 27px;
   background-color: rgba(255, 255, 255, 0.92);
   align-items: center;
   justify-content: center;
+  z-index: 3;
 }
 
 .watermarkResizeText {
-  width: 30px;
-  height: 30px;
+  width: 54px;
+  height: 54px;
   color: #111917;
-  font-size: 18px;
+  font-size: 25px;
   font-weight: 900;
-  line-height: 30px;
+  line-height: 54px;
   text-align: center;
 }
 
@@ -1369,6 +1736,51 @@ function normalizeRotation(rotation) {
   font-size: 14px;
   font-weight: 900;
   line-height: 34px;
+}
+
+.zoomRail {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 188px;
+  height: 38px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  z-index: 6;
+}
+
+.zoomButton {
+  width: 54px;
+  height: 32px;
+  margin-left: 3px;
+  margin-right: 3px;
+  border-radius: 16px;
+  background-color: rgba(255, 255, 255, 0.88);
+  border-width: 1px;
+  border-style: solid;
+  border-color: rgba(255, 255, 255, 0.78);
+  align-items: center;
+  justify-content: center;
+}
+
+.zoomButtonSelected {
+  background-color: #ff8a00;
+  border-color: #ff8a00;
+}
+
+.zoomText {
+  width: 54px;
+  height: 32px;
+  color: #17211d;
+  font-size: 12px;
+  font-weight: 900;
+  text-align: center;
+  line-height: 32px;
+}
+
+.zoomTextSelected {
+  color: #ffffff;
 }
 
 .bottomPanel {
