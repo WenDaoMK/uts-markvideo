@@ -16,41 +16,41 @@
       @zoomchange="handleZoomChange"
     />
 
-    <cover-view class="watermarkLayer" v-if="activeWatermark">
-      <cover-view
+    <movable-area class="watermarkLayer" :style="watermarkLayerStyle" v-if="activeWatermark">
+      <movable-view
         class="watermarkBox"
+        :x="watermarkMoveX"
+        :y="watermarkMoveY"
+        direction="all"
+        :animation="false"
+        :disabled="isRecording || stopPending"
         :style="watermarkBoxStyle"
+        @touchstart="startWatermarkTouch"
+        @touchmove="moveWatermarkTouch"
+        @change="handleWatermarkMoveChange"
+        @touchend="finishWatermarkTouch"
+        @touchcancel="finishWatermarkTouch"
       >
-        <cover-view
-          class="watermarkContent"
-          :style="watermarkContentStyle"
-          @touchstart.stop="startWatermarkDrag"
-          @touchmove.stop="moveWatermark"
-          @touchend.stop="finishWatermarkEdit"
-          @touchcancel.stop="finishWatermarkEdit"
-        >
-          <cover-image
-            v-if="watermarkHasImage"
-            class="watermarkImage"
-            :style="watermarkImageStyle"
-            :src="activeWatermark.imagePath"
-          ></cover-image>
-          <cover-view v-if="watermarkHasText" class="watermarkTextBlock">
-            <text class="watermarkMainText" :style="watermarkMainTextStyle">{{ activeWatermark.mainTitleText }}</text>
-            <text v-if="activeWatermark.subtitleText" class="watermarkSubText" :style="watermarkSubTextStyle">{{ activeWatermark.subtitleText }}</text>
-          </cover-view>
-        </cover-view>
-        <cover-view
-          class="watermarkDragHotspot"
-          :style="watermarkHotspotStyle"
-          @touchstart.stop="startWatermarkDrag"
-          @touchmove.stop="moveWatermark"
-          @touchend.stop="finishWatermarkEdit"
-          @touchcancel.stop="finishWatermarkEdit"
-          @longpress.stop="startWatermarkDrag"
-        ></cover-view>
-        <cover-view
+        <view class="watermarkTransformBox" :style="watermarkTransformStyle">
+          <view
+            class="watermarkContent"
+            :style="watermarkContentStyle"
+          >
+            <image
+              v-if="watermarkHasImage"
+              class="watermarkImage"
+              :style="watermarkImageStyle"
+              :src="activeWatermark.imagePath"
+            ></image>
+            <view v-if="watermarkHasText" class="watermarkTextBlock">
+              <text class="watermarkMainText" :style="watermarkMainTextStyle">{{ activeWatermark.mainTitleText }}</text>
+              <text v-if="activeWatermark.subtitleText" class="watermarkSubText" :style="watermarkSubTextStyle">{{ activeWatermark.subtitleText }}</text>
+            </view>
+          </view>
+        </view>
+        <view
           class="watermarkDelete"
+          :style="watermarkDeleteStyle"
           @click.stop="clearActiveWatermark"
           @touchstart.stop="stopWatermarkTouch"
           @touchmove.stop="stopWatermarkTouch"
@@ -58,24 +58,26 @@
           @touchcancel.stop="stopWatermarkTouch"
         >
           <text class="watermarkDeleteText">×</text>
-        </cover-view>
-        <cover-view
-          class="watermarkResize"
-          @touchstart.stop="startWatermarkResize"
-          @touchmove.stop="moveWatermark"
-          @touchend.stop="finishWatermarkEdit"
-          @touchcancel.stop="finishWatermarkEdit"
+        </view>
+        <view
+          class="watermarkRotate"
+          :style="watermarkRotateStyle"
+          @click.stop="rotateWatermarkQuarterTurn"
+          @touchstart.stop="stopWatermarkTouch"
+          @touchmove.stop="stopWatermarkTouch"
+          @touchend.stop="stopWatermarkTouch"
+          @touchcancel.stop="stopWatermarkTouch"
         >
-          <text
-            class="watermarkResizeText"
-            @touchstart.stop="startWatermarkResize"
-            @touchmove.stop="moveWatermark"
-            @touchend.stop="finishWatermarkEdit"
-            @touchcancel.stop="finishWatermarkEdit"
-          >↻</text>
-        </cover-view>
-      </cover-view>
-    </cover-view>
+          <text class="watermarkRotateText">↻</text>
+        </view>
+        <view
+          class="watermarkResize"
+          :style="watermarkResizeStyle"
+        >
+          <text class="watermarkResizeText">↘</text>
+        </view>
+      </movable-view>
+    </movable-area>
 
     <cover-view class="topBar">
       <cover-view class="topSide">
@@ -153,7 +155,7 @@
           <text class="watermarkSheetClose" @click="closeWatermarkSheet">×</text>
         </cover-view>
         <cover-view class="watermarkEmpty" v-if="!activeWatermark">
-          <text class="watermarkEmptyText">选择一个模板后，可在画面中拖拽、缩放、旋转。</text>
+          <text class="watermarkEmptyText">选择模板后，可拖拽、缩放，点左上角旋转。</text>
         </cover-view>
         <cover-view
           v-for="template in watermarkTemplates"
@@ -181,6 +183,14 @@
 <script>
 const WATERMARK_STORAGE_KEY = 'xyc-camera-watermark-template'
 const WATERMARK_HANDLE_PAD = 30
+const WATERMARK_HANDLE_SIZE = 42
+const WATERMARK_HANDLE_INSET = 9
+const WATERMARK_MIN_SCALE = 0.55
+const WATERMARK_ABSOLUTE_MIN_SCALE = 0.28
+const WATERMARK_PINCH_MIN_DISTANCE = 8
+const RECORD_STOP_TIMEOUT_MS = 12000
+const PORTRAIT_LAYOUT_FALLBACK_WIDTH = 375
+const PORTRAIT_LAYOUT_FALLBACK_HEIGHT = 812
 
 export default {
   data() {
@@ -226,9 +236,15 @@ export default {
         scale: 1,
         rotation: 0
       },
-      watermarkGesture: null,
-      watermarkGestureTimer: null,
+      watermarkPinchGesture: null,
+      watermarkMoveActive: false,
+      watermarkMoveDraft: null,
+      watermarkSyncTimer: null,
       watermarkSyncVersion: 0,
+      watermarkMovePosition: {
+        x: 0,
+        y: 0
+      },
       screenWidth: screen.width,
       previewHeight: screen.height
     }
@@ -310,17 +326,55 @@ export default {
     watermarkHasText() {
       return this.activeWatermark && (this.activeWatermark.mainTitleText || this.activeWatermark.subtitleText)
     },
-    watermarkBoxStyle() {
-      const effectiveWidth = Math.max(1, Math.round(this.watermarkFrame.width * this.watermarkFrame.scale))
-      const effectiveHeight = Math.max(1, Math.round(this.watermarkFrame.height * this.watermarkFrame.scale))
+    watermarkLayerStyle() {
+      const editBounds = this.watermarkEditBounds()
       return {
-        left: (this.watermarkFrame.left - WATERMARK_HANDLE_PAD) + 'px',
-        top: (this.watermarkFrame.top - WATERMARK_HANDLE_PAD) + 'px',
-        width: (effectiveWidth + WATERMARK_HANDLE_PAD * 2) + 'px',
-        height: (effectiveHeight + WATERMARK_HANDLE_PAD * 2) + 'px',
-        transformOrigin: '0% 0%',
-        transform: 'rotate(' + this.watermarkFrame.rotation + 'deg)'
+        left: Math.round(editBounds.left) + 'px',
+        top: Math.round(editBounds.top) + 'px',
+        width: Math.round(editBounds.right - editBounds.left) + 'px',
+        height: Math.round(editBounds.bottom - editBounds.top) + 'px'
       }
+    },
+    watermarkMoveX() {
+      return this.watermarkMovePosition.x
+    },
+    watermarkMoveY() {
+      return this.watermarkMovePosition.y
+    },
+    watermarkBoxStyle() {
+      const frame = this.watermarkVisibleFrame()
+      const metrics = this.watermarkBoxMetrics(frame.width, frame.height, frame.scale, frame.rotation)
+      return {
+        width: Math.round(metrics.containerWidth) + 'px',
+        height: Math.round(metrics.containerHeight) + 'px'
+      }
+    },
+    watermarkTransformStyle() {
+      const frame = this.watermarkVisibleFrame()
+      const metrics = this.watermarkBoxMetrics(frame.width, frame.height, frame.scale, frame.rotation)
+      return {
+        left: Math.round(metrics.transformLeft) + 'px',
+        top: Math.round(metrics.transformTop) + 'px',
+        width: Math.round(metrics.boxWidth) + 'px',
+        height: Math.round(metrics.boxHeight) + 'px',
+        transformOrigin: '50% 50%',
+        transform: 'rotate(' + frame.rotation + 'deg)'
+      }
+    },
+    watermarkRotateStyle() {
+      const frame = this.watermarkVisibleFrame()
+      const metrics = this.watermarkBoxMetrics(frame.width, frame.height, frame.scale, frame.rotation)
+      return this.watermarkControlStyle(metrics.transformLeft + WATERMARK_HANDLE_INSET, metrics.transformTop + WATERMARK_HANDLE_INSET)
+    },
+    watermarkDeleteStyle() {
+      const frame = this.watermarkVisibleFrame()
+      const metrics = this.watermarkBoxMetrics(frame.width, frame.height, frame.scale, frame.rotation)
+      return this.watermarkControlStyle(metrics.transformLeft + metrics.boxWidth - WATERMARK_HANDLE_INSET - WATERMARK_HANDLE_SIZE, metrics.transformTop + WATERMARK_HANDLE_INSET)
+    },
+    watermarkResizeStyle() {
+      const frame = this.watermarkVisibleFrame()
+      const metrics = this.watermarkBoxMetrics(frame.width, frame.height, frame.scale, frame.rotation)
+      return this.watermarkControlStyle(metrics.transformLeft + metrics.boxWidth - WATERMARK_HANDLE_INSET - WATERMARK_HANDLE_SIZE, metrics.transformTop + metrics.boxHeight - WATERMARK_HANDLE_INSET - WATERMARK_HANDLE_SIZE)
     },
     watermarkContentStyle() {
       if (!this.activeWatermark) {
@@ -336,21 +390,13 @@ export default {
         bottom: WATERMARK_HANDLE_PAD + 'px'
       }
     },
-    watermarkHotspotStyle() {
-      return {
-        left: WATERMARK_HANDLE_PAD + 'px',
-        top: WATERMARK_HANDLE_PAD + 'px',
-        right: WATERMARK_HANDLE_PAD + 'px',
-        bottom: WATERMARK_HANDLE_PAD + 'px'
-      }
-    },
     watermarkImageStyle() {
       if (!this.activeWatermark) {
         return {}
       }
       return {
-        width: Math.round(this.activeWatermark.imageWidth * this.watermarkFrame.scale) + 'px',
-        height: Math.round(this.activeWatermark.imageHeight * this.watermarkFrame.scale) + 'px'
+        width: Math.round(this.activeWatermark.imageWidth * this.watermarkVisibleFrame().scale) + 'px',
+        height: Math.round(this.activeWatermark.imageHeight * this.watermarkVisibleFrame().scale) + 'px'
       }
     },
     watermarkMainTextStyle() {
@@ -359,7 +405,7 @@ export default {
       }
       return {
         color: this.activeWatermark.mainTitleColor,
-        fontSize: Math.round(this.activeWatermark.mainTitleFontSize * this.watermarkFrame.scale) + 'px'
+        fontSize: Math.round(this.activeWatermark.mainTitleFontSize * this.watermarkVisibleFrame().scale) + 'px'
       }
     },
     watermarkSubTextStyle() {
@@ -368,7 +414,7 @@ export default {
       }
       return {
         color: this.activeWatermark.subtitleColor,
-        fontSize: Math.round(this.activeWatermark.subtitleFontSize * this.watermarkFrame.scale) + 'px'
+        fontSize: Math.round(this.activeWatermark.subtitleFontSize * this.watermarkVisibleFrame().scale) + 'px'
       }
     }
   },
@@ -399,7 +445,8 @@ export default {
     this.clearRecordStartRetry()
     this.clearRecordStartPendingTimer()
     this.clearRecordStopPendingTimer()
-    this.clearWatermarkGestureTimer()
+    this.clearWatermarkPinchGesture()
+    this.clearWatermarkSyncTimer()
   },
   beforeDestroy() {
     if (this.recordTimer !== null) {
@@ -410,7 +457,8 @@ export default {
     this.clearRecordStartRetry()
     this.clearRecordStartPendingTimer()
     this.clearRecordStopPendingTimer()
-    this.clearWatermarkGestureTimer()
+    this.clearWatermarkPinchGesture()
+    this.clearWatermarkSyncTimer()
   },
   methods: {
     resolveNativeCamera() {
@@ -590,10 +638,10 @@ export default {
       this.stopRecordingClock()
       this.isRecording = false
       this.clearRecordStartPendingTimer()
-      this.recordStartPending = false
       this.clearRecordStopPendingTimer()
+      this.recordStartPending = false
       this.stopPending = false
-      this.nativeStatus = detail.message || '视频已保存到相册'
+      this.nativeStatus = detail.message || (detail.savedToAlbum === true ? '视频已保存到相册' : '视频已生成')
     },
     handleFlashChange(event) {
       const detail = this.eventDetail(event)
@@ -663,22 +711,31 @@ export default {
       this.activeWatermark = nextTemplate
       const defaultWidth = Math.max(92, Math.round(this.screenWidth * (nextTemplate.boxWidth || 0.58)))
       const defaultHeight = Math.max(64, Math.round(this.previewHeight * (nextTemplate.boxHeight || 0.14)))
+      const initialLeft = this.screenWidth * (nextTemplate.positionX || 0.12)
+      const initialTop = this.previewHeight * (nextTemplate.positionY || 0.16)
+      const initialScale = nextTemplate.scale || 1
+      const initialRotation = normalizeRotation(nextTemplate.rotation || 0)
+      const clamped = this.clampWatermarkFrame(initialLeft, initialTop, initialScale, initialRotation, defaultWidth, defaultHeight)
       this.watermarkFrame = {
-        left: this.clampNumber(this.screenWidth * (nextTemplate.positionX || 0.12), 8, this.screenWidth - defaultWidth - 8),
-        top: this.clampNumber(this.previewHeight * (nextTemplate.positionY || 0.16), 96, this.previewHeight - defaultHeight - 190),
+        left: clamped.left,
+        top: clamped.top,
         width: defaultWidth,
         height: defaultHeight,
-        scale: nextTemplate.scale || 1,
-        rotation: nextTemplate.rotation || 0
+        scale: clamped.scale,
+        rotation: clamped.rotation
       }
+      this.watermarkMovePosition = this.watermarkMovePositionFromFrame()
     },
     clearActiveWatermark() {
       if (this.isRecording || this.stopPending) {
         this.nativeStatus = '录像中不能编辑水印'
         return
       }
-      this.clearWatermarkGestureTimer()
-      this.watermarkGesture = null
+      this.clearWatermarkPinchGesture()
+      this.clearWatermarkSyncTimer()
+      this.watermarkPinchGesture = null
+      this.watermarkMoveActive = false
+      this.watermarkMoveDraft = null
       this.watermarkSyncVersion += 1
       this.activeWatermark = null
       uni.removeStorageSync(WATERMARK_STORAGE_KEY)
@@ -689,14 +746,113 @@ export default {
     },
     stopWatermarkTouch() {
     },
+    startWatermarkTouch(event) {
+      if (this.isRecording || this.stopPending || !this.activeWatermark) {
+        return
+      }
+      const touchPair = this.watermarkTouchPair(event, true)
+      if (touchPair) {
+        this.startWatermarkPinch(touchPair)
+        return
+      }
+      this.clearWatermarkPinchGesture()
+      this.startWatermarkMove()
+    },
+    moveWatermarkTouch(event) {
+      if (this.isRecording || this.stopPending || !this.activeWatermark) {
+        return
+      }
+      const touchPair = this.watermarkTouchPair(event, true)
+      if (!touchPair) {
+        return
+      }
+      if (!this.watermarkPinchGesture) {
+        this.startWatermarkPinch(touchPair)
+        return
+      }
+      this.updateWatermarkPinch(touchPair)
+    },
+    finishWatermarkTouch(event) {
+      if (this.watermarkPinchGesture) {
+        const touchPair = this.watermarkTouchPair(event, false)
+        if (touchPair) {
+          this.updateWatermarkPinch(touchPair)
+          return
+        }
+        this.finishWatermarkPinch()
+        return
+      }
+      this.finishWatermarkMove()
+    },
+    startWatermarkMove() {
+      if (this.isRecording || this.stopPending || !this.activeWatermark) {
+        return
+      }
+      this.watermarkMoveActive = true
+      this.watermarkMoveDraft = null
+    },
+    rotateWatermarkQuarterTurn() {
+      if (this.isRecording || this.stopPending || !this.activeWatermark) {
+        this.nativeStatus = '录像中不能编辑水印'
+        return
+      }
+      this.clearWatermarkPinchGesture()
+      const nextRotation = normalizeRotation(this.watermarkFrame.rotation + 90)
+      const clamped = this.clampWatermarkFrame(this.watermarkFrame.left, this.watermarkFrame.top, this.watermarkFrame.scale, nextRotation)
+      this.updateWatermarkFrame({
+        left: clamped.left,
+        top: clamped.top,
+        scale: clamped.scale,
+        rotation: clamped.rotation
+      })
+      this.flushWatermarkSync(false)
+    },
     updateWatermarkFrame(patch) {
+      const nextWidth = typeof patch.width === 'number' ? patch.width : this.watermarkFrame.width
+      const nextHeight = typeof patch.height === 'number' ? patch.height : this.watermarkFrame.height
+      const clamped = this.clampWatermarkFrame(
+        typeof patch.left === 'number' ? patch.left : this.watermarkFrame.left,
+        typeof patch.top === 'number' ? patch.top : this.watermarkFrame.top,
+        typeof patch.scale === 'number' ? patch.scale : this.watermarkFrame.scale,
+        typeof patch.rotation === 'number' ? patch.rotation : this.watermarkFrame.rotation,
+        nextWidth,
+        nextHeight
+      )
       this.watermarkFrame = {
-        left: typeof patch.left === 'number' ? patch.left : this.watermarkFrame.left,
-        top: typeof patch.top === 'number' ? patch.top : this.watermarkFrame.top,
-        width: typeof patch.width === 'number' ? patch.width : this.watermarkFrame.width,
-        height: typeof patch.height === 'number' ? patch.height : this.watermarkFrame.height,
-        scale: typeof patch.scale === 'number' ? patch.scale : this.watermarkFrame.scale,
-        rotation: typeof patch.rotation === 'number' ? patch.rotation : this.watermarkFrame.rotation
+        left: clamped.left,
+        top: clamped.top,
+        width: nextWidth,
+        height: nextHeight,
+        scale: clamped.scale,
+        rotation: clamped.rotation
+      }
+      this.watermarkMovePosition = this.watermarkMovePositionFromFrame()
+      this.watermarkSyncVersion += 1
+    },
+    scheduleWatermarkSync() {
+      if (!this.activeWatermark || this.isRecording || this.stopPending) {
+        return
+      }
+      this.clearWatermarkSyncTimer()
+      this.watermarkSyncTimer = setTimeout(() => {
+        this.watermarkSyncTimer = null
+        this.syncWatermarkToNative(false)
+      }, 160)
+    },
+    async flushWatermarkSync(showError) {
+      this.clearWatermarkSyncTimer()
+      return await this.syncWatermarkToNative(showError === true)
+    },
+    clearWatermarkSyncTimer() {
+      if (this.watermarkSyncTimer !== null) {
+        clearTimeout(this.watermarkSyncTimer)
+        this.watermarkSyncTimer = null
+      }
+    },
+    watermarkControlStyle(left, top) {
+      return {
+        left: Math.round(left) + 'px',
+        top: Math.round(top) + 'px'
       }
     },
     async syncWatermarkToNative(showError) {
@@ -734,21 +890,22 @@ export default {
     },
     async buildNativeWatermarkPayload() {
       const template = cloneTemplate(this.activeWatermark)
-      const effectiveWidth = Math.max(1, Math.round(this.watermarkFrame.width * this.watermarkFrame.scale))
-      const effectiveHeight = Math.max(1, Math.round(this.watermarkFrame.height * this.watermarkFrame.scale))
-      template.positionX = this.watermarkFrame.left / this.screenWidth
-      template.positionY = this.watermarkFrame.top / this.previewHeight
+      const frame = this.watermarkVisibleFrame()
+      const effectiveWidth = Math.max(1, Math.round(frame.width * frame.scale))
+      const effectiveHeight = Math.max(1, Math.round(frame.height * frame.scale))
+      template.positionX = frame.left / this.screenWidth
+      template.positionY = frame.top / this.previewHeight
       template.boxWidth = effectiveWidth / this.screenWidth
       template.boxHeight = effectiveHeight / this.previewHeight
       template.scale = 1
-      template.imageWidth = template.imageWidth * this.watermarkFrame.scale
-      template.imageHeight = template.imageHeight * this.watermarkFrame.scale
-      template.imageTextGap = template.imageTextGap * this.watermarkFrame.scale
-      template.mainTitleFontSize = template.mainTitleFontSize * this.watermarkFrame.scale
-      template.subtitleFontSize = template.subtitleFontSize * this.watermarkFrame.scale
-      template.boxPadding = template.boxPadding * this.watermarkFrame.scale
-      template.boxRadius = template.boxRadius * this.watermarkFrame.scale
-      template.rotation = this.watermarkFrame.rotation
+      template.imageWidth = template.imageWidth * frame.scale
+      template.imageHeight = template.imageHeight * frame.scale
+      template.imageTextGap = template.imageTextGap * frame.scale
+      template.mainTitleFontSize = template.mainTitleFontSize * frame.scale
+      template.subtitleFontSize = template.subtitleFontSize * frame.scale
+      template.boxPadding = template.boxPadding * frame.scale
+      template.boxRadius = template.boxRadius * frame.scale
+      template.rotation = frame.rotation
       template.previewWidth = this.screenWidth
       template.previewHeight = this.previewHeight
       template.nativeImagePath = await this.resolveNativeImagePath(template.imagePath)
@@ -770,119 +927,162 @@ export default {
         })
       })
     },
-    startWatermarkDrag(event) {
+    handleWatermarkMoveChange(event) {
       if (this.isRecording || this.stopPending || !this.activeWatermark) {
-        this.nativeStatus = '录像中不能编辑水印'
         return
       }
-      if (this.watermarkGesture && this.watermarkGesture.type === 'drag') {
+      if (this.watermarkPinchGesture) {
+        this.watermarkMoveActive = false
+        this.watermarkMoveDraft = null
         return
       }
-      const point = this.touchPoint(event)
-      this.clearWatermarkGestureTimer()
-      this.watermarkGesture = {
-        type: 'drag',
-        startX: point.x,
-        startY: point.y,
-        currentX: point.x,
-        currentY: point.y,
-        left: this.watermarkFrame.left,
-        top: this.watermarkFrame.top,
-        changed: false
-      }
-    },
-    startWatermarkResize(event) {
-      if (this.isRecording || this.stopPending || !this.activeWatermark) {
-        this.nativeStatus = '录像中不能编辑水印'
-        return
-      }
-      const point = this.touchPoint(event)
-      const anchor = this.watermarkResizeAnchor()
-      this.clearWatermarkGestureTimer()
-      this.watermarkGesture = {
-        type: 'resize',
-        anchorX: anchor.x,
-        anchorY: anchor.y,
-        distance: Math.max(1, distanceBetween(point.x, point.y, anchor.x, anchor.y)),
-        angle: angleBetween(point.x, point.y, anchor.x, anchor.y),
-        left: this.watermarkFrame.left,
-        top: this.watermarkFrame.top,
-        scale: this.watermarkFrame.scale,
-        rotation: this.watermarkFrame.rotation,
-        currentX: point.x,
-        currentY: point.y,
-        changed: false
-      }
-    },
-    moveWatermark(event) {
-      if (!this.watermarkGesture || !this.activeWatermark || this.isRecording || this.stopPending) {
-        return
-      }
-      const point = this.gesturePoint(event)
-      if (this.watermarkGesture.type === 'drag') {
-        const nextLeft = this.watermarkGesture.left + point.x - this.watermarkGesture.startX
-        const nextTop = this.watermarkGesture.top + point.y - this.watermarkGesture.startY
-        const scaledWidth = Math.max(1, this.watermarkFrame.width * this.watermarkFrame.scale)
-        const scaledHeight = Math.max(1, this.watermarkFrame.height * this.watermarkFrame.scale)
-        this.updateWatermarkFrame({
-          left: this.clampNumber(nextLeft, 8, this.screenWidth - scaledWidth - 8),
-          top: this.clampNumber(nextTop, 96, this.previewHeight - scaledHeight - 190)
-        })
-        this.watermarkGesture.changed = true
-        return
-      }
-      if (this.watermarkGesture.type === 'resize') {
-        const nextDistance = Math.max(1, distanceBetween(point.x, point.y, this.watermarkGesture.anchorX, this.watermarkGesture.anchorY))
-        const nextAngle = angleBetween(point.x, point.y, this.watermarkGesture.anchorX, this.watermarkGesture.anchorY)
-        const maxScale = this.maxWatermarkScale(this.watermarkGesture.left, this.watermarkGesture.top)
-        const nextScale = this.clampNumber(this.watermarkGesture.scale * (nextDistance / this.watermarkGesture.distance), 0.55, maxScale)
-        this.updateWatermarkFrame({
-          scale: nextScale,
-          rotation: normalizeRotation(this.watermarkGesture.rotation + nextAngle - this.watermarkGesture.angle),
-          left: this.watermarkGesture.left,
-          top: this.watermarkGesture.top
-        })
-        this.watermarkGesture.changed = true
-      }
-    },
-    gesturePoint(event) {
-      const point = this.touchPoint(event)
-      if (!(point.x === 0 && point.y === 0)) {
-        this.watermarkGesture.currentX = point.x
-        this.watermarkGesture.currentY = point.y
-        return point
-      }
-      const delta = this.touchDelta(event)
-      const currentX = typeof this.watermarkGesture.currentX === 'number' ? this.watermarkGesture.currentX : this.watermarkGesture.startX
-      const currentY = typeof this.watermarkGesture.currentY === 'number' ? this.watermarkGesture.currentY : this.watermarkGesture.startY
-      this.watermarkGesture.currentX = currentX + delta.x
-      this.watermarkGesture.currentY = currentY + delta.y
-      return {
-        x: this.watermarkGesture.currentX,
-        y: this.watermarkGesture.currentY
-      }
-    },
-    finishWatermarkEdit() {
-      if (!this.watermarkGesture) {
-        return
-      }
-      const changed = this.watermarkGesture.changed === true
-      this.clearWatermarkGestureTimer()
-      this.watermarkGesture = null
-      if (changed) {
-        this.syncWatermarkToNative(false)
-      }
-    },
-    touchDelta(event) {
       const detail = event && event.detail ? event.detail : {}
-      return {
-        x: this.pickDeltaNumber(detail, ['dx', 'deltaX', 'movementX']),
-        y: this.pickDeltaNumber(detail, ['dy', 'deltaY', 'movementY'])
+      const moveX = this.pickMoveNumber(detail, 'x')
+      const moveY = this.pickMoveNumber(detail, 'y')
+      if (moveX === null || moveY === null) {
+        return
+      }
+      const source = detail.source || ''
+      if (!this.watermarkMoveActive && !this.isWatermarkTouchMoveSource(source)) {
+        return
+      }
+      this.watermarkMoveActive = true
+      this.watermarkMoveDraft = {
+        x: moveX,
+        y: moveY
       }
     },
-    pickDeltaNumber(source, names) {
+    isWatermarkTouchMoveSource(source) {
+      return source === 'touch' || source === 'touch-out-of-bounds' || source === 'out-of-bounds' || source === 'friction'
+    },
+    commitWatermarkMoveDraft(flushNow) {
+      if (!this.watermarkMoveDraft || !this.activeWatermark || this.isRecording || this.stopPending) {
+        this.watermarkMoveActive = false
+        this.watermarkMoveDraft = null
+        return
+      }
+      const moveX = this.watermarkMoveDraft.x
+      const moveY = this.watermarkMoveDraft.y
+      const nextFrame = this.watermarkFrameFromMovePosition(moveX, moveY, this.watermarkFrame)
+      this.watermarkMoveActive = false
+      this.watermarkMoveDraft = null
+      if (Math.abs(nextFrame.left - this.watermarkFrame.left) < 0.5 && Math.abs(nextFrame.top - this.watermarkFrame.top) < 0.5) {
+        return
+      }
+      this.updateWatermarkFrame({
+        left: nextFrame.left,
+        top: nextFrame.top,
+        scale: this.watermarkFrame.scale,
+        rotation: this.watermarkFrame.rotation
+      })
+      if (flushNow === true) {
+        this.flushWatermarkSync(false)
+      }
+    },
+    finishWatermarkMove() {
+      if (!this.activeWatermark || this.isRecording || this.stopPending) {
+        return
+      }
+      this.commitWatermarkMoveDraft(true)
+    },
+    startWatermarkPinch(touchPair) {
+      const distance = this.pinchDistance(touchPair)
+      if (distance < WATERMARK_PINCH_MIN_DISTANCE) {
+        return
+      }
+      this.commitWatermarkMoveDraft(false)
+      const frame = this.watermarkVisibleFrame()
+      const size = this.watermarkContentSize(frame.width, frame.height, frame.scale)
+      this.watermarkMoveActive = false
+      this.watermarkMoveDraft = null
+      this.watermarkPinchGesture = {
+        startDistance: distance,
+        startScale: frame.scale,
+        centerX: frame.left + size.width / 2,
+        centerY: frame.top + size.height / 2,
+        width: frame.width,
+        height: frame.height,
+        rotation: frame.rotation,
+        changed: false
+      }
+    },
+    updateWatermarkPinch(touchPair) {
+      if (!this.watermarkPinchGesture) {
+        return
+      }
+      const distance = this.pinchDistance(touchPair)
+      if (distance < WATERMARK_PINCH_MIN_DISTANCE) {
+        return
+      }
+      const ratio = distance / this.watermarkPinchGesture.startDistance
+      const rawScale = this.watermarkPinchGesture.startScale * ratio
+      const nextLeft = this.watermarkPinchGesture.centerX - this.watermarkPinchGesture.width * rawScale / 2
+      const nextTop = this.watermarkPinchGesture.centerY - this.watermarkPinchGesture.height * rawScale / 2
+      const maxScale = this.maxWatermarkScale(nextLeft, nextTop, this.watermarkPinchGesture.rotation, this.watermarkPinchGesture.width, this.watermarkPinchGesture.height)
+      const nextScale = this.clampNumber(rawScale, Math.min(WATERMARK_MIN_SCALE, maxScale), maxScale)
+      const clamped = this.clampWatermarkFrame(
+        this.watermarkPinchGesture.centerX - this.watermarkPinchGesture.width * nextScale / 2,
+        this.watermarkPinchGesture.centerY - this.watermarkPinchGesture.height * nextScale / 2,
+        nextScale,
+        this.watermarkPinchGesture.rotation,
+        this.watermarkPinchGesture.width,
+        this.watermarkPinchGesture.height
+      )
+      this.updateWatermarkFrame({
+        left: clamped.left,
+        top: clamped.top,
+        scale: clamped.scale,
+        rotation: clamped.rotation
+      })
+      this.watermarkPinchGesture.changed = true
+      this.scheduleWatermarkSync()
+    },
+    finishWatermarkPinch() {
+      const changed = this.watermarkPinchGesture && this.watermarkPinchGesture.changed === true
+      this.clearWatermarkPinchGesture()
+      this.watermarkMoveActive = false
+      this.watermarkMoveDraft = null
+      if (changed) {
+        this.flushWatermarkSync(false)
+      }
+    },
+    clearWatermarkPinchGesture() {
+      this.watermarkPinchGesture = null
+    },
+    watermarkTouchPair(event, includeChangedTouches) {
+      const groups = []
+      if (event && event.touches) {
+        groups.push(event.touches)
+      }
+      if (event && event.detail && event.detail.touches) {
+        groups.push(event.detail.touches)
+      }
+      if (includeChangedTouches === true && event && event.changedTouches) {
+        groups.push(event.changedTouches)
+      }
+      if (includeChangedTouches === true && event && event.detail && event.detail.changedTouches) {
+        groups.push(event.detail.changedTouches)
+      }
+      for (let i = 0; i < groups.length; i += 1) {
+        const group = groups[i]
+        if (group && group.length >= 2) {
+          return {
+            first: this.touchPointFromSource(group[0]),
+            second: this.touchPointFromSource(group[1])
+          }
+        }
+      }
+      return null
+    },
+    touchPointFromSource(touch) {
+      return {
+        x: this.pickTouchCoordinate(touch, ['pageX', 'clientX', 'screenX', 'x']),
+        y: this.pickTouchCoordinate(touch, ['pageY', 'clientY', 'screenY', 'y'])
+      }
+    },
+    pickTouchCoordinate(touch, names) {
       for (let i = 0; i < names.length; i += 1) {
-        const value = source ? source[names[i]] : null
+        const value = touch ? touch[names[i]] : null
         if (typeof value === 'number') {
           return value
         }
@@ -894,6 +1094,49 @@ export default {
         }
       }
       return 0
+    },
+    pinchDistance(touchPair) {
+      const x = touchPair.first.x - touchPair.second.x
+      const y = touchPair.first.y - touchPair.second.y
+      return Math.sqrt(x * x + y * y)
+    },
+    pickMoveNumber(source, name) {
+      const value = source ? source[name] : null
+      if (typeof value === 'number') {
+        return value
+      }
+      if (typeof value === 'string' && value.length > 0) {
+        const numberValue = parseFloat(value)
+        if (!isNaN(numberValue)) {
+          return numberValue
+        }
+      }
+      return null
+    },
+    watermarkVisibleFrame() {
+      const frame = this.watermarkFrame
+      if (!this.watermarkMoveDraft || !this.activeWatermark) {
+        return frame
+      }
+      const movedFrame = this.watermarkFrameFromMovePosition(this.watermarkMoveDraft.x, this.watermarkMoveDraft.y, frame)
+      return {
+        left: movedFrame.left,
+        top: movedFrame.top,
+        width: frame.width,
+        height: frame.height,
+        scale: frame.scale,
+        rotation: frame.rotation
+      }
+    },
+    watermarkFrameFromMovePosition(moveX, moveY, frame) {
+      const metrics = this.watermarkBoxMetrics(frame.width, frame.height, frame.scale, frame.rotation)
+      const editBounds = this.watermarkEditBounds()
+      const nextCenterX = editBounds.left + moveX + metrics.containerWidth / 2
+      const nextCenterY = editBounds.top + moveY + metrics.containerHeight / 2
+      return {
+        left: nextCenterX - metrics.contentWidth / 2,
+        top: nextCenterY - metrics.contentHeight / 2
+      }
     },
     touchPoint(event) {
       const touch = this.pickTouchSource(event)
@@ -954,34 +1197,107 @@ export default {
       }
       return 0
     },
-    clearWatermarkGestureTimer() {
-      if (this.watermarkGestureTimer !== null) {
-        clearTimeout(this.watermarkGestureTimer)
-        this.watermarkGestureTimer = null
+    watermarkEditBounds() {
+      return {
+        left: 8,
+        top: 96,
+        right: this.screenWidth - 8,
+        bottom: this.previewHeight - 190
+      }
+    },
+    watermarkContentSize(width, height, scale) {
+      return {
+        width: Math.max(1, width * scale),
+        height: Math.max(1, height * scale)
+      }
+    },
+    watermarkBoxMetrics(width, height, scale, rotation) {
+      const contentSize = this.watermarkContentSize(width, height, scale)
+      const boxWidth = contentSize.width + WATERMARK_HANDLE_PAD * 2
+      const boxHeight = contentSize.height + WATERMARK_HANDLE_PAD * 2
+      const bounds = this.watermarkRotatedBounds(boxWidth, boxHeight, rotation)
+      const containerWidth = Math.max(1, boxWidth, bounds.width)
+      const containerHeight = Math.max(1, boxHeight, bounds.height)
+      return {
+        contentWidth: contentSize.width,
+        contentHeight: contentSize.height,
+        boxWidth,
+        boxHeight,
+        containerWidth,
+        containerHeight,
+        transformLeft: (containerWidth - boxWidth) / 2,
+        transformTop: (containerHeight - boxHeight) / 2
+      }
+    },
+    watermarkRotatedBounds(width, height, rotation) {
+      const radians = rotation * Math.PI / 180
+      const cos = Math.abs(Math.cos(radians))
+      const sin = Math.abs(Math.sin(radians))
+      return {
+        width: width * cos + height * sin,
+        height: width * sin + height * cos
+      }
+    },
+    clampCenterBySize(center, minEdge, maxEdge, size) {
+      if (maxEdge <= minEdge || size >= maxEdge - minEdge) {
+        return (minEdge + maxEdge) / 2
+      }
+      return this.clampNumber(center, minEdge + size / 2, maxEdge - size / 2)
+    },
+    clampWatermarkFrame(left, top, scale, rotation, width, height) {
+      const frameWidth = typeof width === 'number' ? width : this.watermarkFrame.width
+      const frameHeight = typeof height === 'number' ? height : this.watermarkFrame.height
+      const nextRotation = normalizeRotation(rotation)
+      const maxScale = this.maxWatermarkScale(left, top, nextRotation, frameWidth, frameHeight)
+      const nextScale = this.clampNumber(scale, Math.min(WATERMARK_MIN_SCALE, maxScale), maxScale)
+      const size = this.watermarkContentSize(frameWidth, frameHeight, nextScale)
+      const outerBounds = this.watermarkBoxMetrics(frameWidth, frameHeight, nextScale, nextRotation)
+      const editBounds = this.watermarkEditBounds()
+      const centerX = left + size.width / 2
+      const centerY = top + size.height / 2
+      const clampedCenterX = this.clampCenterBySize(centerX, editBounds.left, editBounds.right, outerBounds.containerWidth)
+      const clampedCenterY = this.clampCenterBySize(centerY, editBounds.top, editBounds.bottom, outerBounds.containerHeight)
+      return {
+        left: clampedCenterX - size.width / 2,
+        top: clampedCenterY - size.height / 2,
+        scale: nextScale,
+        rotation: nextRotation
       }
     },
     watermarkCenter() {
-      const scaledWidth = Math.max(1, this.watermarkFrame.width * this.watermarkFrame.scale)
-      const scaledHeight = Math.max(1, this.watermarkFrame.height * this.watermarkFrame.scale)
+      const size = this.watermarkContentSize(this.watermarkFrame.width, this.watermarkFrame.height, this.watermarkFrame.scale)
       return {
-        x: this.watermarkFrame.left + scaledWidth / 2,
-        y: this.watermarkFrame.top + scaledHeight / 2
+        x: this.watermarkFrame.left + size.width / 2,
+        y: this.watermarkFrame.top + size.height / 2
       }
     },
-    watermarkResizeAnchor() {
+    watermarkMovePositionFromFrame() {
+      const metrics = this.watermarkBoxMetrics(this.watermarkFrame.width, this.watermarkFrame.height, this.watermarkFrame.scale, this.watermarkFrame.rotation)
+      const editBounds = this.watermarkEditBounds()
+      const center = this.watermarkCenter()
       return {
-        x: this.watermarkFrame.left,
-        y: this.watermarkFrame.top
+        x: roundWatermarkPx(center.x - metrics.containerWidth / 2 - editBounds.left),
+        y: roundWatermarkPx(center.y - metrics.containerHeight / 2 - editBounds.top)
       }
     },
-    maxWatermarkScale(left, top) {
-      const frameLeft = typeof left === 'number' ? left : this.watermarkFrame.left
-      const frameTop = typeof top === 'number' ? top : this.watermarkFrame.top
-      const maxWidthScale = (this.screenWidth - 16) / Math.max(1, this.watermarkFrame.width)
-      const maxHeightScale = (this.previewHeight - 286) / Math.max(1, this.watermarkFrame.height)
-      const maxRightScale = (this.screenWidth - frameLeft - 8) / Math.max(1, this.watermarkFrame.width)
-      const maxBottomScale = (this.previewHeight - frameTop - 190) / Math.max(1, this.watermarkFrame.height)
-      return Math.max(0.55, Math.min(2.2, maxWidthScale, maxHeightScale, maxRightScale, maxBottomScale))
+    maxWatermarkScale(left, top, rotation, width, height) {
+      const frameWidth = Math.max(1, typeof width === 'number' ? width : this.watermarkFrame.width)
+      const frameHeight = Math.max(1, typeof height === 'number' ? height : this.watermarkFrame.height)
+      const targetRotation = typeof rotation === 'number' ? rotation : this.watermarkFrame.rotation
+      const radians = targetRotation * Math.PI / 180
+      const cos = Math.abs(Math.cos(radians))
+      const sin = Math.abs(Math.sin(radians))
+      const editBounds = this.watermarkEditBounds()
+      const availableWidth = Math.max(1, editBounds.right - editBounds.left)
+      const availableHeight = Math.max(1, editBounds.bottom - editBounds.top)
+      const handleOffset = WATERMARK_HANDLE_PAD * 2 * (cos + sin)
+      const rotatedWidthFactor = Math.max(1, frameWidth * cos + frameHeight * sin)
+      const rotatedHeightFactor = Math.max(1, frameWidth * sin + frameHeight * cos)
+      const maxWidthScale = (availableWidth - handleOffset) / rotatedWidthFactor
+      const maxHeightScale = (availableHeight - handleOffset) / rotatedHeightFactor
+      const maxBoxWidthScale = (availableWidth - WATERMARK_HANDLE_PAD * 2) / frameWidth
+      const maxBoxHeightScale = (availableHeight - WATERMARK_HANDLE_PAD * 2) / frameHeight
+      return Math.max(WATERMARK_ABSOLUTE_MIN_SCALE, Math.min(2.2, maxWidthScale, maxHeightScale, maxBoxWidthScale, maxBoxHeightScale))
     },
     clampNumber(value, min, max) {
       if (max < min) {
@@ -1017,14 +1333,13 @@ export default {
         this.nativeStatus = this.stopPending ? '请等待视频保存完成' : '录像中不能切换模式'
         return
       }
+      if (mode === this.mode) {
+        return
+      }
       this.recordStartAfterPermission = false
       this.clearRecordPermissionRetry()
       this.clearRecordStartRetry()
       this.mode = mode
-      const nativeCamera = this.resolveNativeCamera()
-      if (nativeCamera && typeof nativeCamera.switchMode === 'function') {
-        nativeCamera.switchMode(mode)
-      }
     },
     async cycleFlashMode() {
       if (this.flashPending) {
@@ -1202,7 +1517,7 @@ export default {
           this.nativeStatus = '拍照接口不可用'
           return
         }
-        if (this.activeWatermark && !await this.syncWatermarkToNative(true)) {
+        if (this.activeWatermark && !await this.flushWatermarkSync(true)) {
           return
         }
         const result = await this.normalizeNativeCommandReturn(await nativeCamera.takePhoto(), '拍照失败', '拍照中', ['10', '11', '13', '14'])
@@ -1232,7 +1547,7 @@ export default {
         }
         this.recordStartAfterPermission = false
         this.clearRecordPermissionRetry()
-        if (this.activeWatermark && !await this.syncWatermarkToNative(true)) {
+        if (this.activeWatermark && !await this.flushWatermarkSync(true)) {
           return
         }
         this.recordStartPending = true
@@ -1263,25 +1578,25 @@ export default {
       this.isRecording = false
       this.stopPending = true
       this.nativeStatus = '正在保存视频'
-      this.startRecordStopPendingTimeout()
       this.stopRecordingClock()
+      this.startRecordStopPendingTimeout()
       try {
         const stopResponse = await nativeCamera.stopRecord()
         const result = await this.normalizeNativeCommandReturn(stopResponse, '录像停止失败', '视频保存中', ['14'])
         if (result.success) {
-          this.nativeStatus = result.data && result.data.message ? result.data.message : '视频已保存到相册'
+          this.nativeStatus = result.data && result.data.message ? result.data.message : '视频保存中'
           if (this.nativeStatus !== '视频保存中') {
             this.clearRecordStopPendingTimer()
             this.stopPending = false
           }
         } else {
-          this.clearRecordStopPendingTimer()
           this.nativeStatus = result.errorMessage || '录像停止失败'
+          this.clearRecordStopPendingTimer()
           this.stopPending = false
         }
       } catch (error) {
-        this.clearRecordStopPendingTimer()
         this.nativeStatus = error && error.message ? error.message : '录像停止失败'
+        this.clearRecordStopPendingTimer()
         this.stopPending = false
       }
     },
@@ -1354,11 +1669,9 @@ export default {
         this.recordStopPendingTimer = null
         if (this.stopPending) {
           this.stopPending = false
-          if (this.nativeStatus === '正在保存视频' || this.nativeStatus === '视频保存中') {
-            this.nativeStatus = '视频已保存到相册'
-          }
+          this.nativeStatus = '视频保存超时，请重试'
         }
-      }, 4500)
+      }, RECORD_STOP_TIMEOUT_MS)
     },
     scheduleRecordPermissionRetry() {
       if (!this.recordStartAfterPermission || this.recordPermissionRetryTimer !== null) {
@@ -1447,15 +1760,24 @@ export default {
 function resolveScreenBounds() {
   try {
     const info = uni.getSystemInfoSync()
-    return {
-      width: info.windowWidth || 375,
-      height: info.windowHeight || 812
-    }
+    return normalizePortraitLayoutBounds(
+      info.windowWidth || PORTRAIT_LAYOUT_FALLBACK_WIDTH,
+      info.windowHeight || PORTRAIT_LAYOUT_FALLBACK_HEIGHT
+    )
   } catch (_) {
     return {
-      width: 375,
-      height: 812
+      width: PORTRAIT_LAYOUT_FALLBACK_WIDTH,
+      height: PORTRAIT_LAYOUT_FALLBACK_HEIGHT
     }
+  }
+}
+
+function normalizePortraitLayoutBounds(width, height) {
+  const safeWidth = Math.max(1, Number(width) || PORTRAIT_LAYOUT_FALLBACK_WIDTH)
+  const safeHeight = Math.max(1, Number(height) || PORTRAIT_LAYOUT_FALLBACK_HEIGHT)
+  return {
+    width: Math.min(safeWidth, safeHeight),
+    height: Math.max(safeWidth, safeHeight)
   }
 }
 
@@ -1550,16 +1872,6 @@ function cloneTemplate(template) {
   return JSON.parse(JSON.stringify(template))
 }
 
-function distanceBetween(x1, y1, x2, y2) {
-  const x = x1 - x2
-  const y = y1 - y2
-  return Math.sqrt(x * x + y * y)
-}
-
-function angleBetween(x1, y1, x2, y2) {
-  return Math.atan2(y1 - y2, x1 - x2) * 180 / Math.PI
-}
-
 function normalizeRotation(rotation) {
   if (rotation > 180) {
     return rotation - 360
@@ -1568,6 +1880,10 @@ function normalizeRotation(rotation) {
     return rotation + 360
   }
   return rotation
+}
+
+function roundWatermarkPx(value) {
+  return Math.round(value * 1000) / 1000
 }
 </script>
 
@@ -1587,14 +1903,17 @@ function normalizeRotation(rotation) {
 
 .watermarkLayer {
   position: absolute;
-  left: 0;
-  top: 0;
-  right: 0;
-  bottom: 176px;
   z-index: 3;
 }
 
 .watermarkBox {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.watermarkTransformBox {
   position: absolute;
 }
 
@@ -1612,12 +1931,6 @@ function normalizeRotation(rotation) {
   border-style: solid;
   border-color: rgba(255, 255, 255, 0.86);
   z-index: 1;
-}
-
-.watermarkDragHotspot {
-  position: absolute;
-  background-color: rgba(255, 255, 255, 0.01);
-  z-index: 2;
 }
 
 .watermarkImage {
@@ -1644,15 +1957,13 @@ function normalizeRotation(rotation) {
 
 .watermarkDelete {
   position: absolute;
-  right: 9px;
-  top: 9px;
   width: 42px;
   height: 42px;
   border-radius: 21px;
   background-color: #ff4b42;
   align-items: center;
   justify-content: center;
-  z-index: 3;
+  z-index: 4;
 }
 
 .watermarkDeleteText {
@@ -1665,17 +1976,36 @@ function normalizeRotation(rotation) {
   text-align: center;
 }
 
-.watermarkResize {
+.watermarkRotate {
   position: absolute;
-  right: 9px;
-  bottom: 9px;
   width: 42px;
   height: 42px;
   border-radius: 21px;
   background-color: rgba(255, 255, 255, 0.92);
   align-items: center;
   justify-content: center;
-  z-index: 3;
+  z-index: 4;
+}
+
+.watermarkRotateText {
+  width: 42px;
+  height: 42px;
+  color: #111917;
+  font-size: 21px;
+  font-weight: 900;
+  line-height: 42px;
+  text-align: center;
+}
+
+.watermarkResize {
+  position: absolute;
+  width: 42px;
+  height: 42px;
+  border-radius: 21px;
+  background-color: rgba(255, 255, 255, 0.92);
+  align-items: center;
+  justify-content: center;
+  z-index: 4;
 }
 
 .watermarkResizeText {

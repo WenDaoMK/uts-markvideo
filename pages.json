@@ -19,6 +19,7 @@
     }
   ],
   "globalStyle": {
-    "backgroundColor": "#f6f7f9"
+    "backgroundColor": "#f6f7f9",
+    "pageOrientation": "portrait"
   }
 }

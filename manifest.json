@@ -7,6 +7,10 @@
   "vueVersion": "3",
   "transformPx": false,
   "app-plus": {
+    "screenOrientation": [
+      "portrait-primary",
+      "portrait-secondary"
+    ],
     "usingComponents": true,
     "distribute": {
       "android": {

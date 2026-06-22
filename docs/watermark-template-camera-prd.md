@@ -14,7 +14,7 @@
 - 相机页右侧控制按钮改为圆形 `印` 按钮。
 - 点击 `印` 可以在相机页内重新选择模板。
 - 相机预览上最多显示 1 个可编辑水印，为后续多个水印保留数组结构。
-- 水印支持拖拽、缩放、旋转、删除。
+- 水印支持拖拽、双指捏合缩放、左上角按钮每次旋转 90 度、删除；右下角缩放图标作为贴纸缩放提示，不再承载单指拖拽缩放。
 - 拍照输出必须把当前水印烧录到照片文件。
 - 录像开始时冻结当前水印快照，界面实时显示水印，并把水印烧录到视频文件。
 
@@ -54,7 +54,7 @@ Android 录像不能再使用 `MediaRecorder.VideoSource.CAMERA` 直录作为水
 | `subtitleFontSize` | number | 副标题字号，逻辑像素。 |
 | `mainTitleBold` | boolean | 主标题是否加粗。 |
 | `subtitleBold` | boolean | 副标题是否加粗。 |
-| `imagePath` | string | 图片路径，本阶段默认 `/static/watermark/logo2.png`，页面传给原生前尽量解析为可读本地路径。 |
+| `imagePath` | string | 图片路径，本阶段默认 `/static/watermark/logo2.png`，页面传给原生前尽量解析为可读本地路径；源图至少保持 512px，避免照片烧录时放大模糊。 |
 | `imageWidth` | number | 图片显示宽度。 |
 | `imageHeight` | number | 图片显示高度。 |
 | `imageTextGap` | number | 图片和文字间距。 |
@@ -72,7 +72,7 @@ Android 录像不能再使用 `MediaRecorder.VideoSource.CAMERA` 直录作为水
 ## 默认模板
 
 1. `text-delivery`：纯文字模板，白色半透明背景，主标题加粗。
-2. `image-logo`：纯图片模板，使用 `/static/watermark/logo2.png`。
+2. `image-logo`：纯图片模板，使用高分辨率 `/static/watermark/logo2.png`。
 3. `mixed-site`：图片加文字模板，左图右文字。
 
 ## 首页行为
@@ -90,7 +90,9 @@ Android 录像不能再使用 `MediaRecorder.VideoSource.CAMERA` 直录作为水
 - 如果已从首页传入模板，弹层中对应 item 显示选中态。
 - 选择模板后立即显示水印 overlay 并同步到原生。
 - 删除后清除页面 overlay，并调用 `clearWatermark()`。
-- 拖拽、缩放、旋转结束后调用 `setWatermark()` 更新原生快照。
+- 拖拽采用 `movable-area` + `movable-view`，由原生拖拽组件接管位移；`movable-view` 必须作为 `movable-area` 的直接子节点，水印内容和删除、旋转、缩放控件必须共用同一个移动根。
+- 缩放采用水印主体双指捏合：`movable-view` 继续负责单指拖拽，页面用双指 touch 距离计算 `watermarkFrame.scale`。不要依赖 `movable-view` 原生 `scale` 作为 nvue 主路径，因为 `movable-area` 在 app-nvue 平台手势缩放支持有限；右下角缩放图标只作为视觉提示，不绑定 `touchmove` 缩放逻辑。缩放时页面 overlay 立即更新，原生 `setWatermark()` 做短防抖同步；拖拽松手、缩放松手、拍照前和录像前必须 flush 最新水印。
+- 点击左上角旋转按钮时，水印内容围绕自身中心顺时针旋转 90 度，删除、旋转、缩放三个编辑控件必须放在旋转内容层外，保持贴在未旋转编辑框角点，不随内容旋转或随旋转外接框漂移；整体按内容和控件的外接范围限制在预览可编辑区域内，并立即调用 `setWatermark()`。
 - 录像中冻结水印，禁止删除、切换、拖拽、缩放和旋转。
 
 ## 输出结果
@@ -132,7 +134,7 @@ Android 录像不能再使用 `MediaRecorder.VideoSource.CAMERA` 直录作为水
 - 首页可打开水印设置弹层并选择 3 个模板。
 - 相机页能显示从首页传入的模板。
 - 相机页 `印` 按钮能重新打开模板弹层。
-- 预览水印可拖拽、缩放、旋转、删除。
+- 预览水印可拖拽、双指捏合缩放、左上角按钮旋转 90 度、删除；右下角缩放图标随水印移动但不参与单指缩放；旋转和缩放后的内容及编辑控件不得超出预览可编辑区域，编辑控件不随内容旋转。
 - 录像中水印不可编辑，界面继续显示冻结水印。
 - 拍照后相册照片可看到水印。
 - 选中水印后录像，视频结果返回水印快照和 `watermarkVideoBurnIn=true`，相册回放可看到水印。
