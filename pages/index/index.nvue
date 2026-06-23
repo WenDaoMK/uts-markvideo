@@ -17,7 +17,7 @@
       </view>
       <view class="panelRow">
         <text class="panelLabel">图片资源</text>
-        <text class="panelValue">{{ currentTemplate && currentTemplate.imagePath ? 'logo2.png' : '无' }}</text>
+        <text class="panelValue">{{ currentTemplate && currentTemplate.imagePath ? 'logo3.png' : '无' }}</text>
       </view>
       <view class="panelRow">
         <text class="panelLabel">录像</text>
@@ -135,7 +135,7 @@ export default {
 }
 
 function createWatermarkTemplates() {
-  const logo = '/static/watermark/logo2.png'
+  const logo = '/static/watermark/logo3.png'
   return [
     {
       templateId: 'text-delivery',

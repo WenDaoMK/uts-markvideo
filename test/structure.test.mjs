@@ -11,6 +11,13 @@ const testWatermarkMinScale = 0.55;
 const testWatermarkAbsoluteMinScale = 0.28;
 const testWatermarkMaxScale = 2.2;
 const testWatermarkPinchMinDistance = 8;
+const testCameraTopBarHeight = 90;
+const testCameraBottomPanelHeight = 176;
+const testCameraViewportAspectWidth = 3;
+const testCameraViewportAspectHeight = 4;
+const testCameraFrameAspectShortOverLong = 3 / 4;
+const testWatermarkDefaultMinWidth = 92;
+const testWatermarkDefaultMinHeight = 64;
 
 const requiredFiles = [
   'App.vue',
@@ -20,9 +27,8 @@ const requiredFiles = [
   'pages/index/index.nvue',
   'pages/cameraX/index.nvue',
   'docs/watermark-template-camera-prd.md',
-  'static/watermark/logo2.png',
+  'static/watermark/logo3.png',
   'uni_modules/xyc-markvideo/package.json',
-  'uni_modules/xyc-markvideo/utssdk/app-android/AndroidManifest.xml',
   'uni_modules/xyc-markvideo/utssdk/app-android/XycNativeCameraView.kt',
   'uni_modules/xyc-markvideo/utssdk/app-android/index.vue',
   'uni_modules/xyc-markvideo/utssdk/app-ios/index.vue',
@@ -114,8 +120,8 @@ function testWatermarkBoxMetrics(width, height, scale, rotation) {
   const boxWidth = contentWidth + testWatermarkHandlePad * 2;
   const boxHeight = contentHeight + testWatermarkHandlePad * 2;
   const bounds = testWatermarkRotatedBounds(boxWidth, boxHeight, rotation);
-  const containerWidth = Math.max(1, boxWidth, bounds.width);
-  const containerHeight = Math.max(1, boxHeight, bounds.height);
+  const containerWidth = Math.max(1, bounds.width, contentWidth);
+  const containerHeight = Math.max(1, bounds.height, contentHeight);
 
   return {
     contentWidth,
@@ -135,10 +141,42 @@ function testMaxWatermarkScale(editWidth, editHeight, frameWidth, frameHeight, r
   const sin = Math.abs(Math.sin(radians));
   const rotatedWidthFactor = Math.max(1, frameWidth * cos + frameHeight * sin);
   const rotatedHeightFactor = Math.max(1, frameWidth * sin + frameHeight * cos);
-  const maxWidthScale = editWidth / rotatedWidthFactor;
-  const maxHeightScale = editHeight / rotatedHeightFactor;
+  const handlePadding = testWatermarkHandlePad * 2;
+  const rotatedHandlePadding = handlePadding * (cos + sin);
+  const maxWidthScale = (editWidth - rotatedHandlePadding) / rotatedWidthFactor;
+  const maxHeightScale = (editHeight - rotatedHandlePadding) / rotatedHeightFactor;
+  const contentMaxWidthScale = editWidth / frameWidth;
+  const contentMaxHeightScale = editHeight / frameHeight;
 
-  return Math.max(testWatermarkAbsoluteMinScale, Math.min(testWatermarkMaxScale, maxWidthScale, maxHeightScale));
+  return Math.max(
+    testWatermarkAbsoluteMinScale,
+    Math.min(testWatermarkMaxScale, maxWidthScale, maxHeightScale, contentMaxWidthScale, contentMaxHeightScale),
+  );
+}
+
+function testCameraViewportBounds(width, height) {
+  const availableTop = testCameraTopBarHeight;
+  const availableBottom = Math.max(availableTop + 1, height - testCameraBottomPanelHeight);
+  const availableHeight = Math.max(1, availableBottom - availableTop);
+  const targetWidth = Math.min(
+    width,
+    availableHeight * testCameraViewportAspectWidth / testCameraViewportAspectHeight,
+  );
+  const targetHeight = targetWidth * testCameraViewportAspectHeight / testCameraViewportAspectWidth;
+  const left = (width - targetWidth) / 2;
+  const top = availableTop + (availableHeight - targetHeight) / 2;
+  return {
+    left,
+    top,
+    right: left + targetWidth,
+    bottom: top + targetHeight,
+    width: targetWidth,
+    height: targetHeight,
+  };
+}
+
+function assertClose(actual, expected, message) {
+  assert.ok(Math.abs(actual - expected) <= 0.001, `${message}: expected ${expected}, got ${actual}`);
 }
 
 function rotatePointAroundCenter(point, center, rotation) {
@@ -219,6 +257,36 @@ function assertPinchScaleIsDirectional() {
   assert.ok(Math.abs(testPinchScale(0.8, 80, 120) - 1.2) < 0.0001);
 }
 
+function testClampNumber(value, min, max) {
+  if (max < min) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, value));
+}
+
+function testClampCenterBySize(center, minEdge, maxEdge, size) {
+  if (maxEdge <= minEdge || size >= maxEdge - minEdge) {
+    return (minEdge + maxEdge) / 2;
+  }
+  return testClampNumber(center, minEdge + size / 2, maxEdge - size / 2);
+}
+
+function testClampWatermarkFrame(frame, editBounds) {
+  const metrics = testWatermarkBoxMetrics(frame.width, frame.height, frame.scale, frame.rotation);
+  const centerX = frame.left + metrics.contentWidth / 2;
+  const centerY = frame.top + metrics.contentHeight / 2;
+  const clampedCenterX = testClampCenterBySize(centerX, editBounds.left, editBounds.right, metrics.containerWidth);
+  const clampedCenterY = testClampCenterBySize(centerY, editBounds.top, editBounds.bottom, metrics.containerHeight);
+  const contentLeft = testClampNumber(clampedCenterX - metrics.contentWidth / 2, editBounds.left, editBounds.right - metrics.contentWidth);
+  const contentTop = testClampNumber(clampedCenterY - metrics.contentHeight / 2, editBounds.top, editBounds.bottom - metrics.contentHeight);
+
+  return {
+    ...frame,
+    left: contentLeft,
+    top: contentTop,
+  };
+}
+
 function testWatermarkMovePositionFromFrame(frame, editBounds) {
   const metrics = testWatermarkBoxMetrics(frame.width, frame.height, frame.scale, frame.rotation);
   const contentWidth = frame.width * frame.scale;
@@ -232,6 +300,110 @@ function testWatermarkMovePositionFromFrame(frame, editBounds) {
   };
 }
 
+function testNativeWatermarkPayloadFromFrame(frame, viewport) {
+  const effectiveWidth = Math.max(1, Math.round(frame.width * frame.scale));
+  const effectiveHeight = Math.max(1, Math.round(frame.height * frame.scale));
+  const payloadLeft = testClampNumber(frame.left, viewport.left, viewport.right - effectiveWidth);
+  const payloadTop = testClampNumber(frame.top, viewport.top, viewport.bottom - effectiveHeight);
+
+  return {
+    positionX: (payloadLeft - viewport.left) / viewport.width,
+    positionY: (payloadTop - viewport.top) / viewport.height,
+    boxWidth: effectiveWidth / viewport.width,
+    boxHeight: effectiveHeight / viewport.height,
+  };
+}
+
+function testAspectRatioForMatch(width, height) {
+  const longEdge = Math.max(width, height);
+  const shortEdge = Math.min(width, height);
+  return shortEdge / longEdge;
+}
+
+function testSizeFitsQualityCap(width, height) {
+  return Math.max(width, height) <= 1920 && width * height <= 2073600;
+}
+
+function testPhotoSizeFitsQualityCap(width, height) {
+  return Math.max(width, height) <= 3000 && width * height <= 6000000;
+}
+
+function testChooseCameraSizeForTarget(sizes, targetSize) {
+  const targetAspect = testAspectRatioForMatch(targetSize.width, targetSize.height);
+  return [...sizes].sort((left, right) => {
+    const leftDelta = Math.abs(testAspectRatioForMatch(left.width, left.height) - targetAspect);
+    const rightDelta = Math.abs(testAspectRatioForMatch(right.width, right.height) - targetAspect);
+    if (leftDelta !== rightDelta) {
+      return leftDelta - rightDelta;
+    }
+    if (testSizeFitsQualityCap(left.width, left.height) !== testSizeFitsQualityCap(right.width, right.height)) {
+      return testSizeFitsQualityCap(right.width, right.height) - testSizeFitsQualityCap(left.width, left.height);
+    }
+    return right.width * right.height - left.width * left.height;
+  })[0];
+}
+
+function testChoosePhotoSizeForFixedFrame(sizes) {
+  return [...sizes].sort((left, right) => {
+    const leftDelta = Math.abs(testAspectRatioForMatch(left.width, left.height) - testCameraFrameAspectShortOverLong);
+    const rightDelta = Math.abs(testAspectRatioForMatch(right.width, right.height) - testCameraFrameAspectShortOverLong);
+    if (leftDelta !== rightDelta) {
+      return leftDelta - rightDelta;
+    }
+    if (testPhotoSizeFitsQualityCap(left.width, left.height) !== testPhotoSizeFitsQualityCap(right.width, right.height)) {
+      return testPhotoSizeFitsQualityCap(right.width, right.height) - testPhotoSizeFitsQualityCap(left.width, left.height);
+    }
+    return right.width * right.height - left.width * left.height;
+  })[0];
+}
+
+function testWatermarkTemplateMinimumFrameSize(template) {
+  const padding = Math.max(0, template.boxPadding || 0);
+  const imageWidth = template.imagePath ? Math.max(0, template.imageWidth || 0) : 0;
+  const imageHeight = template.imagePath ? Math.max(0, template.imageHeight || 0) : 0;
+  const textWidth = template.mainTitleText || template.subtitleText ? 1 : 0;
+  const imageTextGap = imageWidth > 0 && textWidth > 0 ? Math.max(0, template.imageTextGap || 0) : 0;
+
+  return {
+    width: imageWidth + imageTextGap + textWidth + padding * 2,
+    height: imageHeight + padding * 2,
+  };
+}
+
+function testWatermarkTemplateFrameSize(template, viewport) {
+  const minimumFrameSize = testWatermarkTemplateMinimumFrameSize(template);
+  return {
+    width: Math.max(
+      testWatermarkDefaultMinWidth,
+      minimumFrameSize.width,
+      Math.round(viewport.width * (template.boxWidth || 0.58)),
+    ),
+    height: Math.max(
+      testWatermarkDefaultMinHeight,
+      minimumFrameSize.height,
+      Math.round(viewport.height * (template.boxHeight || 0.14)),
+    ),
+  };
+}
+
+function testApplyWatermarkTemplateState(template, viewport) {
+  const frameSize = testWatermarkTemplateFrameSize(template, viewport);
+  const frame = {
+    left: viewport.left + viewport.width * (template.positionX || 0.12),
+    top: viewport.top + viewport.height * (template.positionY || 0.16),
+    width: frameSize.width,
+    height: frameSize.height,
+    scale: template.scale || 1,
+    rotation: template.rotation || 0,
+  };
+
+  return {
+    activeWatermark: { ...template },
+    frame,
+    payload: testNativeWatermarkPayloadFromFrame(frame, viewport),
+  };
+}
+
 test('project contains the xyc-markvideo cameraX mainline files', async () => {
   for (const file of requiredFiles) {
     await access(path.join(root, file));
@@ -239,10 +411,10 @@ test('project contains the xyc-markvideo cameraX mainline files', async () => {
 });
 
 test('watermark logo source asset is high enough for photo burn-in', async () => {
-  const dimensions = await readPngDimensions('static/watermark/logo2.png');
+  const dimensions = await readPngDimensions('static/watermark/logo3.png');
 
-  assert.ok(dimensions.width >= 512, `logo2.png width should be >= 512, got ${dimensions.width}`);
-  assert.ok(dimensions.height >= 512, `logo2.png height should be >= 512, got ${dimensions.height}`);
+  assert.ok(dimensions.width >= 512, `logo3.png width should be >= 512, got ${dimensions.width}`);
+  assert.ok(dimensions.height >= 512, `logo3.png height should be >= 512, got ${dimensions.height}`);
 });
 
 test('watermark resize handle uses native view lines for the diagonal glyph', async () => {
@@ -330,7 +502,7 @@ test('index.nvue manages watermark templates before opening cameraX', async () =
   assert.match(page, /templateType: 'text'/);
   assert.match(page, /templateType: 'image'/);
   assert.match(page, /templateType: 'mixed'/);
-  assert.match(page, /\/static\/watermark\/logo2\.png/);
+  assert.match(page, /\/static\/watermark\/logo3\.png/);
   assert.match(page, /uni\.setStorageSync\(WATERMARK_STORAGE_KEY/);
   assert.match(page, /this\.currentTemplateId = ''[\s\S]*this\.currentTemplate = null/);
   assert.doesNotMatch(page, /embedded-camera-payload/);
@@ -347,6 +519,7 @@ test('cameraX nvue page owns UI and calls xyc-markvideo native camera methods', 
 
   assert.match(page, /<xyc-markvideo/);
   assert.match(page, /ref="nativeCamera"/);
+  assert.match(page, /:style="cameraViewportStyle"/);
   assert.match(page, /:target-fps="targetFps"/);
   assert.match(page, /targetFps: 30/);
   assert.match(page, /flashMode: 'off'/);
@@ -358,10 +531,21 @@ test('cameraX nvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /@photodone="handlePhotoDone"/);
   assert.match(page, /@recordstart="handleRecordStart"/);
   assert.match(page, /@recorddone="handleRecordDone"/);
+  assert.match(page, /@camerachange="handleCameraChange"/);
   assert.match(page, /const PORTRAIT_LAYOUT_FALLBACK_WIDTH = 375/);
   assert.match(page, /const PORTRAIT_LAYOUT_FALLBACK_HEIGHT = 812/);
+  assert.match(page, /const CAMERA_TOP_BAR_HEIGHT = 90/);
+  assert.match(page, /const CAMERA_BOTTOM_PANEL_HEIGHT = 176/);
+  assert.match(page, /const CAMERA_VIEWPORT_ASPECT_WIDTH = 3/);
+  assert.match(page, /const CAMERA_VIEWPORT_ASPECT_HEIGHT = 4/);
+  assert.match(page, /const RESULT_CACHE_LIMIT = 4/);
   assert.match(page, /resolveScreenBounds\(\)/);
   assert.match(page, /normalizePortraitLayoutBounds\(/);
+  assert.match(page, /resolveCameraViewportBounds\(screen\.width, screen\.height\)/);
+  assert.match(page, /cameraViewportStyle\(\) \{[\s\S]*const viewport = this\.cameraViewportBounds\(\)[\s\S]*width: Math\.round\(viewport\.width\) \+ 'px'[\s\S]*height: Math\.round\(viewport\.height\) \+ 'px'/);
+  assert.match(page, /function resolveCameraViewportBounds\(width, height\)/);
+  assert.match(page, /availableHeight \* CAMERA_VIEWPORT_ASPECT_WIDTH \/ CAMERA_VIEWPORT_ASPECT_HEIGHT/);
+  assert.match(page, /const left = \(safeWidth - targetWidth\) \/ 2/);
   assert.match(page, /info\.windowWidth \|\| PORTRAIT_LAYOUT_FALLBACK_WIDTH/);
   assert.match(page, /info\.windowHeight \|\| PORTRAIT_LAYOUT_FALLBACK_HEIGHT/);
   assert.match(page, /width: Math\.min\(safeWidth, safeHeight\)/);
@@ -396,6 +580,12 @@ test('cameraX nvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /zoomRequestSilent: false/);
   assert.match(page, /zoomEventHandled: false/);
   assert.match(page, /zoomEventApplied: true/);
+  assert.match(page, /cameraFacing: 'back'/);
+  assert.match(page, /cameraSwitchPending: false/);
+  assert.match(page, /cameraSwitchTapAt: 0/);
+  assert.match(page, /applyNativeCameraState\(detail\)/);
+  assert.match(page, /if \(detail\.cameraFacing\) \{[\s\S]*this\.cameraFacing = detail\.cameraFacing/);
+  assert.match(page, /handleCameraChange\(event\)/);
   assert.match(page, /zoomRail/);
   assert.match(page, /wideZoomButtonClass/);
   assert.match(page, /normalZoomButtonClass/);
@@ -403,6 +593,11 @@ test('cameraX nvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /syncZoomMode/);
   assert.match(page, /setZoomMode\(mode\)/);
   assert.match(page, /zoomModeLabel\(mode\)/);
+  assert.match(page, /switchCameraFacing\(\)/);
+  assert.match(page, /nativeCamera\.switchCamera\(\)/);
+  assert.match(page, /cameraFacingLabel\(facing\)/);
+  assert.match(page, /原生摄像头切换接口不可用/);
+  assert.match(page, /录像中不能切换摄像头/);
   assert.match(page, /this\.recordStartAfterPermission = true/);
   assert.match(page, /this\.clearRecordPermissionRetry\(\)/);
   assert.match(page, /this\.zoomRequestSilent = silent === true/);
@@ -420,6 +615,20 @@ test('cameraX nvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /updateWatermarkFrame\(patch\)/);
   assert.doesNotMatch(page, /this\.watermarkFrame\.(left|top|scale|rotation)\s*=/);
   assert.match(page, /showWatermarkSheet/);
+  assert.match(page, /lastMediaResult: null/);
+  assert.match(page, /recentMediaResults: \[\]/);
+  assert.match(page, /openSystemAlbum\(\)/);
+  assert.doesNotMatch(page, /openResultSheet\(\)/);
+  assert.doesNotMatch(page, /showResultSheet/);
+  assert.match(page, /lastMediaThumbClass\(\)/);
+  assert.match(page, /lastMediaThumbSource\(\)/);
+  assert.match(page, /rememberMediaResult\(kind, detail\)/);
+  assert.match(page, /this\.lastMediaResult = nextItem/);
+  assert.match(page, /thumbnailPath: this\.pickMediaThumbnailPath\(kind, source, path\)/);
+  assert.match(page, /const statusText = source\.message \|\| \(savedToAlbum \? '已保存到相册' : '已生成，相册保存失败'\)/);
+  assert.match(page, /this\.recentMediaResults = nextResults\.slice\(0, RESULT_CACHE_LIMIT\)/);
+  assert.match(page, /this\.rememberMediaResult\('photo', detail\)/);
+  assert.match(page, /this\.rememberMediaResult\('video', detail\)/);
   assert.match(page, /openWatermarkSheet\(\)/);
   assert.match(page, /selectWatermarkTemplate/);
   assert.match(page, /clearActiveWatermark/);
@@ -427,8 +636,9 @@ test('cameraX nvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /nativeCamera\.setWatermark/);
   assert.match(page, /nativeCamera\.clearWatermark/);
   assert.match(page, /<movable-area class="watermarkLayer" :style="watermarkLayerStyle" v-if="activeWatermark">/);
+  assert.doesNotMatch(page, /<movable-area class="watermarkLayer" :key="watermarkRenderKey"/);
   assert.match(page, /<movable-view[\s\S]*class="watermarkBox"[\s\S]*:x="watermarkMoveX"[\s\S]*:y="watermarkMoveY"[\s\S]*direction="all"[\s\S]*:animation="false"[\s\S]*:disabled="watermarkMoveDisabled"[\s\S]*@touchstart="startWatermarkTouch"[\s\S]*@touchmove="moveWatermarkTouch"[\s\S]*@change="handleWatermarkMoveChange"[\s\S]*@touchend="finishWatermarkTouch"/);
-  assert.match(page, /class="watermarkTransformBox"/);
+  assert.match(page, /<view class="watermarkTransformBox" :key="watermarkRenderKey" :style="watermarkTransformStyle">/);
   assert.match(page, /watermarkLayerStyle\(\)/);
   assert.match(page, /watermarkMoveX\(\)/);
   assert.match(page, /watermarkMoveY\(\)/);
@@ -547,15 +757,30 @@ test('cameraX nvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /return '开'/);
   assert.match(page, /return '自动'/);
   assert.match(page, /return '关'/);
-  assert.ok(topBar.indexOf('flashPillClass') > -1 && topBar.indexOf('class="fpsPill"') > -1);
-  assert.ok(topBar.indexOf('flashPillClass') < topBar.indexOf('class="fpsPill"'));
-  assert.match(page, /<text class="fpsText">/);
+  assert.ok(topBar.indexOf('flashPillClass') > -1 && topBar.indexOf('switchCameraButtonClass') > -1);
+  assert.ok(topBar.indexOf('flashPillClass') < topBar.indexOf('switchCameraButtonClass'));
+  assert.match(page, /class="switchCameraTapArea" @click\.stop="switchCameraFacing"/);
+  assert.doesNotMatch(page, /@touchend\.stop="switchCameraFacing"/);
+  assert.match(page, /<text class="switchCameraIcon">⇄<\/text>/);
+  assert.doesNotMatch(page, /class="switchCameraGlyph"/);
+  assert.doesNotMatch(page, /class="switchCameraLens"/);
+  assert.doesNotMatch(page, /class="switchCameraTopLine"/);
+  assert.doesNotMatch(page, /class="fpsPill"/);
+  assert.doesNotMatch(page, /class="fpsText"/);
   assert.match(page, /<text :class="wideZoomTextClass">广角<\/text>/);
   assert.match(page, /<text :class="normalZoomTextClass">1x<\/text>/);
   assert.match(page, /<text :class="teleZoomTextClass">2x<\/text>/);
   assert.match(page, /class="shutterWrap"/);
-  assert.match(page, /class="resultButton controlLeft"/);
-  assert.match(page, /class="cameraButton controlRight"/);
+  assert.match(page, /class="resultButton controlLeft" @click="openSystemAlbum"/);
+  assert.match(page, /class="cameraButton controlRight" @click="openWatermarkSheet"/);
+  assert.match(page, /<cover-image v-if="lastMediaThumbSource" class="resultThumbImage" :src="lastMediaThumbSource"><\/cover-image>/);
+  assert.match(page, /<text v-if="!lastMediaThumbSource" class="resultThumbIcon">相<\/text>/);
+  assert.match(page, /<text v-if="lastMediaResult && lastMediaResult\.kind === 'video'" class="resultVideoBadge">▶<\/text>/);
+  assert.doesNotMatch(page, /class="resultSheet"/);
+  assert.doesNotMatch(page, /v-for="item in recentMediaResults"/);
+  assert.doesNotMatch(page, /openSystemAlbumPlaceholder\(\)/);
+  assert.doesNotMatch(page, /系统相册跳转占位/);
+  assert.match(page, /xyc-markvideo/);
   assert.match(page, /<text class="cameraIcon">印<\/text>/);
   assert.match(page, /class="watermarkLayer"/);
   assert.match(page, /class="watermarkDelete"/);
@@ -588,13 +813,17 @@ test('cameraX nvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /const WATERMARK_HANDLE_SIZE = 42/);
   assert.match(page, /const WATERMARK_HANDLE_INSET = 9/);
   assert.match(page, /watermarkLayerStyle\(\) \{[\s\S]*const editBounds = this\.watermarkEditBounds\(\)[\s\S]*width: Math\.round\(editBounds\.right - editBounds\.left\) \+ 'px'/);
+  assert.match(page, /watermarkEditBounds\(\) \{[\s\S]*return this\.cameraViewportBounds\(\)/);
+  assert.match(page, /applyWatermarkTemplate\(template\) \{[\s\S]*const viewport = this\.cameraViewportBounds\(\)[\s\S]*const initialLeft = viewport\.left \+ viewport\.width \* \(nextTemplate\.positionX \|\| 0\.12\)[\s\S]*const initialTop = viewport\.top \+ viewport\.height \* \(nextTemplate\.positionY \|\| 0\.16\)/);
+  assert.match(page, /buildNativeWatermarkPayload\(\) \{[\s\S]*const viewport = this\.cameraViewportBounds\(\)[\s\S]*const payloadLeft = this\.clampNumber\(frame\.left, viewport\.left, viewport\.right - effectiveWidth\)[\s\S]*template\.positionX = \(payloadLeft - viewport\.left\) \/ viewport\.width[\s\S]*template\.previewHeight = viewport\.height/);
   assert.doesNotMatch(page, /\.watermarkBox \{[\s\S]*overflow: visible;/);
   assert.doesNotMatch(page, /\.watermarkTransformBox \{[\s\S]*overflow: visible;/);
   assert.match(page, /watermarkBoxStyle\(\) \{[\s\S]*const frame = this\.watermarkLayoutFrame\(\)[\s\S]*width: Math\.round\(metrics\.containerWidth\) \+ 'px'[\s\S]*height: Math\.round\(metrics\.containerHeight\) \+ 'px'/);
   assert.match(page, /watermarkTransformStyle\(\) \{[\s\S]*const frame = this\.watermarkLayoutFrame\(\)[\s\S]*const scaleRatio = this\.watermarkPinchScaleRatio\(\)[\s\S]*left: Math\.round\(metrics\.transformLeft\) \+ 'px'[\s\S]*top: Math\.round\(metrics\.transformTop\) \+ 'px'/);
   assert.match(page, /transformOrigin: '50% 50%'/);
   assert.match(page, /transform: 'rotate\(' \+ frame\.rotation \+ 'deg\) scale\(' \+ scaleRatio \+ '\)'/);
-  assert.match(page, /watermarkImageStyle\(\) \{[\s\S]*width: Math\.round\(this\.activeWatermark\.imageWidth \* this\.watermarkLayoutFrame\(\)\.scale\) \+ 'px'[\s\S]*height: Math\.round\(this\.activeWatermark\.imageHeight \* this\.watermarkLayoutFrame\(\)\.scale\) \+ 'px'[\s\S]*transformOrigin: '50% 50%'[\s\S]*transform: 'scaleY\(-1\)'/);
+  assert.match(page, /watermarkImageStyle\(\) \{[\s\S]*width: Math\.round\(this\.activeWatermark\.imageWidth \* this\.watermarkLayoutFrame\(\)\.scale\) \+ 'px'[\s\S]*height: Math\.round\(this\.activeWatermark\.imageHeight \* this\.watermarkLayoutFrame\(\)\.scale\) \+ 'px'[\s\S]*marginRight: this\.watermarkHasText \? Math\.round\(this\.activeWatermark\.imageTextGap \* this\.watermarkLayoutFrame\(\)\.scale\) \+ 'px' : '0px'/);
+  assert.doesNotMatch(page, /transform: 'scaleY\(-1\)'/);
   assert.doesNotMatch(page, /transformOrigin: '0% 0%'/);
   assert.match(page, /:style="watermarkDeleteStyle"/);
   assert.match(page, /:style="watermarkRotateStyle"/);
@@ -626,6 +855,8 @@ test('cameraX nvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /startWatermarkMove\(\)/);
   assert.match(page, /watermarkMoveActive: false/);
   assert.match(page, /watermarkMoveDraft: null/);
+  assert.match(page, /watermarkTransitionDisabled: false/);
+  assert.match(page, /watermarkTransitionTimer: null/);
   assert.match(page, /const moveX = this\.pickMoveNumber\(detail, 'x'\)/);
   assert.match(page, /const moveY = this\.pickMoveNumber\(detail, 'y'\)/);
   assert.match(page, /this\.watermarkMoveDraft = \{[\s\S]*x: moveX,[\s\S]*y: moveY/);
@@ -636,9 +867,18 @@ test('cameraX nvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /left: nextCenterX - metrics\.contentWidth \/ 2/);
   assert.match(page, /const movedFrame = this\.watermarkFrameFromMovePosition\(this\.watermarkMoveDraft\.x, this\.watermarkMoveDraft\.y, frame\)/);
   assert.match(page, /startWatermarkPinch\(touchPair\) \{[\s\S]*const distance = this\.pinchDistance\(touchPair\)[\s\S]*this\.commitWatermarkMoveDraft\(false\)[\s\S]*this\.clearWatermarkSyncTimer\(\)[\s\S]*const startFrame = \{[\s\S]*startScale: startFrame\.scale[\s\S]*previewScaleRatio: 1[\s\S]*commitFrame: null/);
-  assert.match(page, /updateWatermarkPinch\(touchPair\) \{[\s\S]*const ratio = distance \/ this\.watermarkPinchGesture\.startDistance[\s\S]*const rawScale = this\.watermarkPinchGesture\.startScale \* ratio[\s\S]*previewScaleRatio: clamped\.scale \/ this\.watermarkPinchGesture\.startScale[\s\S]*commitFrame: \{/);
-  const moveChangeBody = page.match(/handleWatermarkMoveChange\(event\) \{[\s\S]*?isWatermarkTouchMoveSource\(source\)/)?.[0] || '';
+  assert.match(page, /buildWatermarkPinchUpdate\(touchPair\) \{[\s\S]*const ratio = distance \/ this\.watermarkPinchGesture\.startDistance[\s\S]*const rawScale = this\.watermarkPinchGesture\.startScale \* ratio[\s\S]*previewScaleRatio: clamped\.scale \/ this\.watermarkPinchGesture\.startScale[\s\S]*commitFrame: \{/);
+  assert.match(page, /const WATERMARK_PINCH_FRAME_INTERVAL_MS = 16/);
+  assert.match(page, /pendingFrame: null/);
+  assert.match(page, /lastUpdateAt: 0/);
+  assert.match(page, /now - this\.watermarkPinchGesture\.lastUpdateAt < WATERMARK_PINCH_FRAME_INTERVAL_MS/);
+  assert.match(page, /finishWatermarkPinch\(\) \{[\s\S]*this\.watermarkPinchGesture\.pendingFrame[\s\S]*this\.applyWatermarkPinchUpdate\(this\.watermarkPinchGesture\.pendingFrame, Date\.now\(\)\)/);
+  const moveChangeBody = page.match(/handleWatermarkMoveChange\(event\) \{[\s\S]*?\n    \},\n    commitWatermarkMoveDraft/)?.[0] || '';
+  assert.notEqual(moveChangeBody, '', 'handleWatermarkMoveChange body should be inspectable');
   assert.doesNotMatch(moveChangeBody, /updateWatermarkFrame|scheduleWatermarkSync|syncWatermarkToNative|flushWatermarkSync/);
+  assert.match(moveChangeBody, /if \(!this\.watermarkMoveActive\) \{[\s\S]*return[\s\S]*\}/);
+  assert.doesNotMatch(moveChangeBody, /isWatermarkTouchMoveSource/);
+  assert.doesNotMatch(moveChangeBody, /this\.watermarkMoveActive = true/);
   const pinchMoveBody = page.match(/updateWatermarkPinch\(touchPair\) \{[\s\S]*?finishWatermarkPinch\(\) \{/)?.[0] || '';
   assert.doesNotMatch(pinchMoveBody, /updateWatermarkFrame|scheduleWatermarkSync|syncWatermarkToNative|flushWatermarkSync/);
   assert.match(page, /if \(this\.watermarkPinchGesture\) \{[\s\S]*this\.watermarkMoveActive = false[\s\S]*this\.watermarkMoveDraft = null[\s\S]*return/);
@@ -660,17 +900,19 @@ test('cameraX nvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /watermarkBoxMetrics\(width, height, scale, rotation\) \{/);
   assert.match(page, /const boxWidth = contentSize\.width \+ WATERMARK_HANDLE_PAD \* 2/);
   assert.match(page, /const bounds = this\.watermarkRotatedBounds\(boxWidth, boxHeight, rotation\)/);
-  assert.match(page, /const containerWidth = Math\.max\(1, boxWidth, bounds\.width\)/);
-  assert.match(page, /const containerHeight = Math\.max\(1, boxHeight, bounds\.height\)/);
+  assert.match(page, /const containerWidth = Math\.max\(1, bounds\.width, contentSize\.width\)/);
+  assert.match(page, /const containerHeight = Math\.max\(1, bounds\.height, contentSize\.height\)/);
   assert.match(page, /transformLeft: \(containerWidth - boxWidth\) \/ 2/);
   assert.doesNotMatch(page, /rotatedLeft: \(containerWidth - bounds\.width\) \/ 2/);
   assert.doesNotMatch(page, /rotatedTop: \(containerHeight - bounds\.height\) \/ 2/);
   assert.match(page, /watermarkRotatedBounds\(width, height, rotation\) \{/);
   assert.match(page, /clampCenterBySize\(center, minEdge, maxEdge, size\) \{/);
   assert.match(page, /clampWatermarkFrame\(left, top, scale, rotation, width, height\) \{/);
-  assert.match(page, /const contentBounds = this\.watermarkRotatedBounds\(size\.width, size\.height, nextRotation\)/);
-  assert.match(page, /const clampedCenterX = this\.clampCenterBySize\(centerX, editBounds\.left, editBounds\.right, contentBounds\.width\)/);
-  assert.match(page, /const clampedCenterY = this\.clampCenterBySize\(centerY, editBounds\.top, editBounds\.bottom, contentBounds\.height\)/);
+  assert.match(page, /const metrics = this\.watermarkBoxMetrics\(frameWidth, frameHeight, nextScale, nextRotation\)/);
+  assert.match(page, /const clampedCenterX = this\.clampCenterBySize\(centerX, editBounds\.left, editBounds\.right, metrics\.containerWidth\)/);
+  assert.match(page, /const clampedCenterY = this\.clampCenterBySize\(centerY, editBounds\.top, editBounds\.bottom, metrics\.containerHeight\)/);
+  assert.match(page, /const contentLeft = this\.clampNumber\(clampedCenterX - size\.width \/ 2, editBounds\.left, editBounds\.right - size\.width\)/);
+  assert.match(page, /const contentTop = this\.clampNumber\(clampedCenterY - size\.height \/ 2, editBounds\.top, editBounds\.bottom - size\.height\)/);
   assert.match(page, /x: roundWatermarkPx\(center\.x - metrics\.containerWidth \/ 2 - editBounds\.left\)/);
   assert.match(page, /y: roundWatermarkPx\(center\.y - metrics\.containerHeight \/ 2 - editBounds\.top\)/);
 	  assert.doesNotMatch(page, /watermarkResizeAnchor\(frame\) \{/);
@@ -696,7 +938,7 @@ test('cameraX nvue page owns UI and calls xyc-markvideo native camera methods', 
 	  assert.doesNotMatch(page, /this\.watermarkGesture\.centerX - scaledWidth \/ 2/);
   assert.doesNotMatch(page, /const handleOffset = WATERMARK_HANDLE_PAD/);
   assert.doesNotMatch(page, /maxBoxWidthScale|maxBoxHeightScale/);
-  assert.match(page, /return Math\.max\(WATERMARK_ABSOLUTE_MIN_SCALE, Math\.min\(WATERMARK_MAX_SCALE, maxWidthScale, maxHeightScale\)\)/);
+  assert.match(page, /return Math\.max\(WATERMARK_ABSOLUTE_MIN_SCALE, Math\.min\(WATERMARK_MAX_SCALE, maxWidthScale, maxHeightScale, contentMaxWidthScale, contentMaxHeightScale\)\)/);
   assert.doesNotMatch(page, /anchorX: anchor\.x/);
   assert.doesNotMatch(page, /nextAngle/);
   assert.doesNotMatch(page, /frameRotation: frame\.rotation/);
@@ -721,6 +963,11 @@ test('cameraX nvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /\.flashPillActive \{[\s\S]*background-color: #ff8a00;[\s\S]*border-color: #ff8a00;/);
   assert.match(page, /\.flashTextActive \{[\s\S]*color: #ffffff;/);
   assert.match(page, /\.flashTapArea \{[\s\S]*width: 64px;[\s\S]*height: 42px;[\s\S]*justify-content: center;/);
+  assert.match(page, /\.topSide \{[\s\S]*width: 64px;[\s\S]*height: 42px;[\s\S]*justify-content: center;/);
+  assert.match(page, /\.backButton \{[\s\S]*width: 64px;[\s\S]*height: 36px;[\s\S]*border-radius: 18px;/);
+  assert.match(page, /\.flashPill \{[\s\S]*width: 64px;[\s\S]*height: 36px;[\s\S]*border-radius: 18px;/);
+  assert.match(page, /\.switchCameraTapArea \{[\s\S]*width: 64px;[\s\S]*height: 42px;[\s\S]*justify-content: center;/);
+  assert.match(page, /\.switchCameraButton \{[\s\S]*width: 64px;[\s\S]*height: 36px;[\s\S]*border-radius: 18px;/);
   assert.match(page, /\.zoomRail \{[\s\S]*bottom: 188px;/);
   assert.match(page, /\.zoomButtonSelected \{[\s\S]*background-color: #ff8a00;[\s\S]*border-color: #ff8a00;/);
   assert.match(page, /\.zoomTextSelected \{[\s\S]*color: #ffffff;/);
@@ -772,20 +1019,276 @@ test('watermark pinch scale follows two-finger distance', () => {
   assertPinchScaleIsDirectional();
 });
 
-test('watermark scale max is based on visible content, not edit handle padding', () => {
+test('camera viewport fits a centered 3:4 area between top and bottom controls', () => {
+  const tallViewport = testCameraViewportBounds(375, 812);
+  assertClose(tallViewport.left, 0, 'tall viewport should use full width');
+  assertClose(tallViewport.width, 375, 'tall viewport width');
+  assertClose(tallViewport.height, 500, 'tall viewport height');
+  assertClose(tallViewport.width / tallViewport.height, 3 / 4, 'tall viewport aspect');
+  assertClose(tallViewport.left, (375 - tallViewport.width) / 2, 'tall viewport horizontal centering');
+  assert.ok(tallViewport.top >= testCameraTopBarHeight);
+  assert.ok(tallViewport.bottom <= 812 - testCameraBottomPanelHeight);
+
+  const shortViewport = testCameraViewportBounds(375, 667);
+  assertClose(shortViewport.width, 300.75, 'short viewport width should shrink to fit height');
+  assertClose(shortViewport.height, 401, 'short viewport height should use the available center height');
+  assertClose(shortViewport.left, 37.125, 'short viewport should be centered horizontally');
+  assertClose(shortViewport.top, 90, 'short viewport should start after top controls');
+  assertClose(shortViewport.width / shortViewport.height, 3 / 4, 'short viewport aspect');
+  assertClose(shortViewport.left, (375 - shortViewport.width) / 2, 'short viewport horizontal centering');
+  assert.ok(shortViewport.bottom <= 667 - testCameraBottomPanelHeight);
+
+  const compactViewport = testCameraViewportBounds(320, 568);
+  assertClose(compactViewport.width, 226.5, 'compact viewport width should shrink to fit height');
+  assertClose(compactViewport.height, 302, 'compact viewport height');
+  assertClose(compactViewport.left, 46.75, 'compact viewport horizontal centering');
+  assertClose(compactViewport.width / compactViewport.height, 3 / 4, 'compact viewport aspect');
+});
+
+test('watermark scale max keeps the full edit box inside the camera viewport', () => {
   const screenWidth = 375;
-  const editWidth = screenWidth - 16;
-  const editHeight = 526;
+  const viewport = testCameraViewportBounds(screenWidth, 812);
+  const editWidth = viewport.width;
+  const editHeight = viewport.height;
   const wideTemplateWidth = Math.round(screenWidth * 0.66);
   const wideTemplateHeight = Math.round(screenWidth * 0.16);
 
-  assert.ok(testMaxWatermarkScale(editWidth, editHeight, wideTemplateWidth, wideTemplateHeight, 0) > 1.4);
-  assert.ok(testMaxWatermarkScale(editWidth, editHeight, wideTemplateWidth, wideTemplateHeight, 90) > 2);
+  assert.ok(testMaxWatermarkScale(editWidth, editHeight, wideTemplateWidth, wideTemplateHeight, 0) > 1.2);
+  assert.ok(testMaxWatermarkScale(editWidth, editHeight, wideTemplateWidth, wideTemplateHeight, 90) > 1.5);
+});
+
+test('rotated watermark drag root balances rotated edit handles and native content bounds', () => {
+  const screenWidth = 375;
+  const editWidth = testCameraViewportBounds(screenWidth, 812).width;
+  const frame = {
+    width: Math.round(screenWidth * 0.66),
+    height: Math.round(screenWidth * 0.16),
+    scale: 1,
+    rotation: 90,
+  };
+  const metrics = testWatermarkBoxMetrics(frame.width, frame.height, frame.scale, frame.rotation);
+  const oldContainerWidth = Math.max(1, metrics.boxWidth, metrics.containerWidth);
+  const currentMoveRange = editWidth - metrics.containerWidth;
+  const oldMoveRange = editWidth - oldContainerWidth;
+
+  assert.equal(metrics.containerWidth, frame.width, '90deg wide watermark root should still cover native content width');
+  assert.ok(metrics.containerWidth < metrics.boxWidth, '90deg wide watermark root should stay narrower than the unrotated edit box');
+  assert.ok(oldMoveRange < editWidth / 4, 'old unrotated-width root reproduces the narrow center drag band');
+  assert.ok(currentMoveRange > editWidth / 3, 'content-safe rotated root keeps a materially wider horizontal drag range');
+});
+
+test('rotated watermark clamp keeps movable-view x inside native bounds at edit edges', () => {
+  const editBounds = testCameraViewportBounds(375, 812);
+  const frame = {
+    width: Math.round(375 * 0.66),
+    height: Math.round(375 * 0.16),
+    scale: 1,
+    rotation: 90,
+  };
+  const metrics = testWatermarkBoxMetrics(frame.width, frame.height, frame.scale, frame.rotation);
+  const maxMoveX = editBounds.right - editBounds.left - metrics.containerWidth;
+  const maxMoveY = editBounds.bottom - editBounds.top - metrics.containerHeight;
+  const edgeFrames = [
+    { ...frame, left: -80, top: 140 },
+    { ...frame, left: editBounds.right - metrics.contentWidth + 80, top: 140 },
+    { ...frame, left: 80, top: -60 },
+    { ...frame, left: 80, top: editBounds.bottom - metrics.contentHeight + 90 },
+  ];
+
+  for (const edgeFrame of edgeFrames) {
+    const clamped = testClampWatermarkFrame(edgeFrame, editBounds);
+    const move = testWatermarkMovePositionFromFrame(clamped, editBounds);
+    const contentWidth = clamped.width * clamped.scale;
+    const contentHeight = clamped.height * clamped.scale;
+    const payload = testNativeWatermarkPayloadFromFrame(clamped, editBounds);
+
+    assert.ok(move.x >= -0.001, `move.x should not be negative: ${move.x}`);
+    assert.ok(move.x <= maxMoveX + 0.001, `move.x should not exceed native max: ${move.x}`);
+    assert.ok(move.y >= -0.001, `move.y should not be negative: ${move.y}`);
+    assert.ok(move.y <= maxMoveY + 0.001, `move.y should not exceed native max: ${move.y}`);
+    assert.ok(clamped.left >= editBounds.left - 0.001, `content left should stay in viewport: ${clamped.left}`);
+    assert.ok(clamped.top >= editBounds.top - 0.001, `content top should stay in viewport: ${clamped.top}`);
+    assert.ok(clamped.left + contentWidth <= editBounds.right + 0.001, `content right should stay in viewport: ${clamped.left + contentWidth}`);
+    assert.ok(clamped.top + contentHeight <= editBounds.bottom + 0.001, `content bottom should stay in viewport: ${clamped.top + contentHeight}`);
+    assert.ok(payload.positionX >= -0.001 && payload.positionX <= 1, `native positionX should not rely on native clamp: ${payload.positionX}`);
+    assert.ok(payload.positionY >= -0.001 && payload.positionY <= 1, `native positionY should not rely on native clamp: ${payload.positionY}`);
+    assert.ok(payload.positionX + payload.boxWidth <= 1.001, `native x rect should fit viewport: ${payload.positionX + payload.boxWidth}`);
+    assert.ok(payload.positionY + payload.boxHeight <= 1.001, `native y rect should fit viewport: ${payload.positionY + payload.boxHeight}`);
+  }
+});
+
+test('pure image watermark frame fits the image plus template padding', async () => {
+  const page = await readFile(path.join(root, 'pages/cameraX/index.nvue'), 'utf8');
+  const viewport = testCameraViewportBounds(320, 568);
+  const pureImageTemplate = {
+    templateId: 'image-logo',
+    templateType: 'image',
+    imagePath: '/static/watermark/logo3.png',
+    imageWidth: 72,
+    imageHeight: 72,
+    boxWidth: 0.34,
+    boxHeight: 0.18,
+    boxPadding: 12,
+    imageTextGap: 0,
+    mainTitleText: '',
+    subtitleText: '',
+  };
+  const oldDefaultHeight = Math.max(
+    testWatermarkDefaultMinHeight,
+    Math.round(viewport.height * pureImageTemplate.boxHeight),
+  );
+  const minimumFrameSize = testWatermarkTemplateMinimumFrameSize(pureImageTemplate);
+  const frameSize = testWatermarkTemplateFrameSize(pureImageTemplate, viewport);
+  const payload = testNativeWatermarkPayloadFromFrame({
+    left: viewport.left + viewport.width * 0.16,
+    top: viewport.top + viewport.height * 0.16,
+    width: frameSize.width,
+    height: frameSize.height,
+    scale: 1,
+    rotation: 0,
+  }, viewport);
+
+  assert.ok(oldDefaultHeight < minimumFrameSize.height, 'old compact viewport default reproduces image clipping');
+  assert.equal(minimumFrameSize.width, 96);
+  assert.equal(minimumFrameSize.height, 96);
+  assert.ok(frameSize.width >= minimumFrameSize.width);
+  assert.ok(frameSize.height >= minimumFrameSize.height);
+  assert.ok(payload.boxWidth * viewport.width >= minimumFrameSize.width);
+  assert.ok(payload.boxHeight * viewport.height >= minimumFrameSize.height);
+  assert.match(page, /const WATERMARK_DEFAULT_MIN_WIDTH = 92/);
+  assert.match(page, /const WATERMARK_DEFAULT_MIN_HEIGHT = 64/);
+  assert.match(page, /watermarkTemplateMinimumFrameSize\(template\) \{/);
+  assert.match(page, /watermarkTemplateFrameSize\(template, viewport\) \{/);
+  assert.match(page, /Math\.round\(viewport\.width \* \(template\.boxWidth \|\| 0\.58\)\)/);
+  assert.match(page, /Math\.round\(viewport\.height \* \(template\.boxHeight \|\| 0\.14\)\)/);
+  assert.match(page, /imageWidth \+ imageTextGap \+ textWidth \+ padding \* 2/);
+  assert.match(page, /imageHeight \+ padding \* 2/);
+  assert.match(page, /const defaultSize = this\.watermarkTemplateFrameSize\(nextTemplate, viewport\)/);
+  assert.match(page, /width: defaultSize\.width/);
+  assert.match(page, /height: defaultSize\.height/);
+  assert.match(page, /padding: Math\.round\(this\.activeWatermark\.boxPadding \* this\.watermarkLayoutFrame\(\)\.scale\) \+ 'px'/);
+  assert.match(page, /marginRight: this\.watermarkHasText \? Math\.round\(this\.activeWatermark\.imageTextGap \* this\.watermarkLayoutFrame\(\)\.scale\) \+ 'px' : '0px'/);
+  assert.doesNotMatch(page, /\.watermarkContent \{[^}]*padding: 10px;/);
+  assert.doesNotMatch(page, /\.watermarkImage \{[^}]*margin-right: 8px;/);
+});
+
+test('Android preview size matches photo aspect so camera UI and captured photo align', async () => {
+  const nativeView = await readFile(path.join(root, 'uni_modules/xyc-markvideo/utssdk/app-android/XycNativeCameraView.kt'), 'utf8');
+  const photoSelected = testChoosePhotoSizeForFixedFrame([
+    { width: 3840, height: 2160 },
+    { width: 2560, height: 1920 },
+    { width: 1920, height: 1080 },
+  ]);
+  const selected = testChooseCameraSizeForTarget([
+    { width: 1920, height: 1080 },
+    { width: 1440, height: 1080 },
+    { width: 1280, height: 720 },
+  ], photoSelected);
+
+  assert.deepEqual(photoSelected, { width: 2560, height: 1920 });
+  assert.deepEqual(selected, { width: 1440, height: 1080 });
+  assert.deepEqual(testChoosePhotoSizeForFixedFrame([
+    { width: 4000, height: 3000 },
+    { width: 1920, height: 1080 },
+  ]), { width: 4000, height: 3000 });
+  assert.deepEqual(testChooseCameraSizeForTarget([
+    { width: 4000, height: 3000 },
+    { width: 1920, height: 1080 },
+  ], { width: 4000, height: 3000 }), { width: 4000, height: 3000 });
+  assert.match(nativeView, /pictureSize = choosePhotoSize\(parameters\.supportedPictureSizes\)[\s\S]*val selectedPreviewSize = chooseCameraSize\(parameters\.supportedPreviewSizes, pictureSize\)/);
+  assert.match(nativeView, /videoSize = chooseVideoSize\(parameters, pictureSize\)/);
+  assert.match(nativeView, /private fun chooseCameraSize\(sizes: List<Camera\.Size>\?, targetSize: XycSize\? = null\): Camera\.Size/);
+  assert.match(nativeView, /private fun chooseVideoSize\(parameters: Camera\.Parameters, targetSize: XycSize\): XycSize/);
+  assert.match(nativeView, /val targetAspect = targetCameraFrameAspect\(\)/);
+  assert.match(nativeView, /CAMERA_FRAME_ASPECT_SHORT_EDGE = 3f/);
+  assert.match(nativeView, /CAMERA_FRAME_ASPECT_LONG_EDGE = 4f/);
+  assert.match(nativeView, /val selected = chooseCameraSize\(videoSizes, targetSize\)/);
+  assert.match(nativeView, /val targetAspect = targetSize\?\.let \{ aspectRatioForMatch\(it\.width, it\.height\) \}/);
+  assert.match(nativeView, /aspectDelta\(it\.width, it\.height, targetAspect\)/);
+  assert.match(nativeView, /\.thenByDescending \{ photoSizeFitsQualityCap\(it\.width, it\.height\) \}/);
+  assert.match(nativeView, /\.thenByDescending \{ sizeFitsQualityCap\(it\.width, it\.height\) \}/);
+});
+
+test('switching from mixed template to pure image rebuilds layout from the pure image frame', async () => {
+  const page = await readFile(path.join(root, 'pages/cameraX/index.nvue'), 'utf8');
+  const applyBody = page.match(/applyWatermarkTemplate\(template\) \{[\s\S]*?\n    \},\n    clearActiveWatermark\(\) \{/)?.[0] || '';
+  const activeAssignmentIndex = applyBody.indexOf('this.activeWatermark = nextTemplate');
+  const frameAssignmentIndex = applyBody.indexOf('this.watermarkFrame = {');
+  const mixedTemplate = {
+    templateId: 'mixed-site',
+    templateType: 'mixed',
+    imagePath: '/static/watermark/logo3.png',
+    imageWidth: 36,
+    imageHeight: 36,
+    boxWidth: 0.66,
+    boxHeight: 0.16,
+    boxPadding: 12,
+    imageTextGap: 8,
+    mainTitleText: '南京西路',
+    subtitleText: '门店巡检 · 2026-06-22',
+    positionX: 0.12,
+    positionY: 0.16,
+    scale: 1,
+    rotation: 0,
+  };
+  const pureImageTemplate = {
+    templateId: 'image-logo',
+    templateType: 'image',
+    imagePath: '/static/watermark/logo3.png',
+    imageWidth: 72,
+    imageHeight: 72,
+    boxWidth: 0.34,
+    boxHeight: 0.18,
+    boxPadding: 12,
+    imageTextGap: 0,
+    mainTitleText: '',
+    subtitleText: '',
+    positionX: 0.16,
+    positionY: 0.16,
+    scale: 1,
+    rotation: 0,
+  };
+  const viewport = testCameraViewportBounds(320, 568);
+  const mixedSize = testWatermarkTemplateFrameSize(mixedTemplate, viewport);
+  const pureSize = testWatermarkTemplateFrameSize(pureImageTemplate, viewport);
+  const mixedState = testApplyWatermarkTemplateState(mixedTemplate, viewport);
+  const pureImageState = testApplyWatermarkTemplateState(pureImageTemplate, viewport);
+  const pureImageMinimumHeight = testWatermarkTemplateMinimumFrameSize(pureImageTemplate).height;
+
+  assert.ok(mixedSize.height < pureImageMinimumHeight);
+  assert.equal(pureSize.height, 96);
+  assert.equal(mixedState.activeWatermark.templateId, 'mixed-site');
+  assert.equal(pureImageState.activeWatermark.templateId, 'image-logo');
+  assert.equal(pureImageState.activeWatermark.mainTitleText, '');
+  assert.equal(pureImageState.activeWatermark.subtitleText, '');
+  assert.equal(pureImageState.activeWatermark.imageTextGap, 0);
+  assert.equal(pureImageState.frame.height, pureImageMinimumHeight);
+  assert.ok(pureImageState.payload.boxHeight * viewport.height >= pureImageMinimumHeight);
+  assert.notEqual(pureImageState.frame.height, mixedState.frame.height);
+  assert.notEqual(applyBody, '', 'applyWatermarkTemplate body should be inspectable');
+  assert.ok(frameAssignmentIndex !== -1 && activeAssignmentIndex !== -1);
+  assert.ok(frameAssignmentIndex < activeAssignmentIndex, 'template switch should set the new frame before rendering the new template');
+  assert.match(applyBody, /this\.clearWatermarkSyncTimer\(\)/);
+  assert.match(applyBody, /this\.clearWatermarkTransitionTimer\(\)/);
+  assert.match(applyBody, /this\.watermarkTransitionDisabled = true/);
+  assert.match(applyBody, /this\.clearWatermarkPinchGesture\(\)/);
+  assert.match(applyBody, /this\.watermarkMoveActive = false/);
+  assert.match(applyBody, /this\.watermarkMoveDraft = null/);
+  assert.match(applyBody, /this\.watermarkRenderKey \+= 1/);
+  assert.match(applyBody, /this\.watermarkTransitionTimer = setTimeout\(\(\) => \{[\s\S]*this\.watermarkTransitionDisabled = false[\s\S]*\}, 180\)/);
+  assert.match(page, /const transitionDuration = this\.watermarkPinchActive\(\) \|\| this\.watermarkTransitionDisabled \? '0ms' : '120ms'/);
+  assert.match(page, /clearWatermarkTransitionTimer\(\) \{[\s\S]*clearTimeout\(this\.watermarkTransitionTimer\)/);
+  assert.match(page, /if \(!this\.watermarkMoveActive\) \{[\s\S]*return[\s\S]*\}/);
+  assert.doesNotMatch(page, /if \(!this\.watermarkMoveActive && !this\.isWatermarkTouchMoveSource\(source\)\)/);
+  assert.doesNotMatch(page, /isWatermarkTouchMoveSource\(source\)/);
+  assert.match(page, /watermarkRenderKey: 0/);
+  assert.doesNotMatch(page, /<movable-area class="watermarkLayer" :key="watermarkRenderKey"/);
+  assert.match(page, /<view class="watermarkTransformBox" :key="watermarkRenderKey" :style="watermarkTransformStyle">/);
 });
 
 test('watermark pinch preview uses a stable full-area root while the visual box scales', async () => {
   const page = await readFile(path.join(root, 'pages/cameraX/index.nvue'), 'utf8');
-  const editBounds = { left: 8, top: 96 };
+  const editBounds = testCameraViewportBounds(375, 812);
   const startFrame = {
     left: 120,
     top: 260,
@@ -865,25 +1368,30 @@ test('xyc-markvideo Android component bridges to native camera view', async () =
   assert.match(android, /'recordstart'/);
   assert.match(android, /'recorddone'/);
   assert.match(android, /'zoomchange'/);
+  assert.match(android, /'camerachange'/);
   assert.doesNotMatch(android, /'shuttertap'/);
   assert.doesNotMatch(android, /'modechange'/);
   assert.doesNotMatch(android, /\$emit\('shuttertap'/);
   assert.doesNotMatch(android, /\$emit\('modechange'/);
-  assert.match(android, /expose: \['setStatus', 'switchMode', 'setFlashMode', 'setZoomMode', 'setWatermark', 'clearWatermark', 'takePhoto', 'startRecord', 'stopRecord', 'restartCamera', 'preparePermissions', 'prepareRecordPermissions', 'destroyCamera'\]/);
+  assert.match(android, /expose: \['setStatus', 'switchMode', 'setFlashMode', 'setZoomMode', 'switchCamera', 'setWatermark', 'clearWatermark', 'takePhoto', 'startRecord', 'stopRecord', 'openSystemAlbum', 'restartCamera', 'preparePermissions', 'prepareRecordPermissions', 'destroyCamera'\]/);
   assert.match(android, /switchMode\(mode : string\)/);
   assert.match(android, /setFlashMode\(mode : string\) : string/);
   assert.match(android, /setZoomMode\(mode : string\) : string/);
+  assert.match(android, /switchCamera\(\) : string/);
   assert.match(android, /setWatermark\(template : any\) : string/);
   assert.match(android, /clearWatermark\(\) : string/);
   assert.match(android, /nativeViewUnavailable\(\) : string/);
   assert.doesNotMatch(android, /type NativeCameraResult/);
   assert.match(android, /return view\.setFlashMode\(mode\)/);
   assert.match(android, /return view\.setZoomMode\(mode\)/);
+  assert.match(android, /return view\.switchCamera\(\)/);
   assert.doesNotMatch(android, /JSON\.parse<NativeCameraResult>\(text\)/);
   assert.doesNotMatch(android, /JSON\.parse\(text\) as NativeCameraResult/);
   assert.match(android, /takePhoto\(\)/);
   assert.match(android, /startRecord\(options : any = \{\}\)/);
   assert.match(android, /stopRecord\(\)/);
+  assert.match(android, /openSystemAlbum\(mediaUri : string = ''\) : string/);
+  assert.match(android, /return view\.openSystemAlbum\(mediaUri\)/);
   assert.match(android, /preparePermissions\(\)/);
   assert.match(android, /prepareRecordPermissions\(\)/);
   assert.doesNotMatch(android, /createPendingResult/);
@@ -902,17 +1410,34 @@ test('xyc-markvideo Android native view uses camera preview, photo, and 30fps re
   assert.match(nativeView, /SurfaceView/);
   assert.match(nativeView, /Camera\.open/);
   assert.match(nativeView, /import android\.content\.pm\.ActivityInfo/);
+  assert.match(nativeView, /import android\.content\.Intent/);
+  assert.match(nativeView, /import android\.media\.MediaMetadataRetriever/);
+  assert.match(nativeView, /import android\.provider\.MediaStore/);
+  assert.match(nativeView, /import android\.view\.OrientationEventListener/);
   assert.match(nativeView, /lockHostActivityToPortrait\(\)/);
   assert.match(nativeView, /try \{[\s\S]*activity\.requestedOrientation = ActivityInfo\.SCREEN_ORIENTATION_PORTRAIT[\s\S]*\} catch \(throwable: Throwable\)/);
   assert.match(nativeView, /Log\.w\(LOG_TAG, "Failed to lock host activity to portrait\.", throwable\)/);
   assert.match(nativeView, /requestedOrientation != ActivityInfo\.SCREEN_ORIENTATION_PORTRAIT/);
   assert.match(nativeView, /activity\.requestedOrientation = ActivityInfo\.SCREEN_ORIENTATION_PORTRAIT/);
+  assert.match(nativeView, /private var deviceOrientationDegrees = 0/);
+  assert.match(nativeView, /captureOrientationListener = object : OrientationEventListener\(context\.applicationContext\)/);
+  assert.match(nativeView, /OrientationEventListener\.ORIENTATION_UNKNOWN/);
+  assert.match(nativeView, /deviceOrientationDegrees = roundDeviceOrientationDegrees\(orientation\)/);
+  assert.match(nativeView, /captureOrientationListener\.enable\(\)/);
+  assert.match(nativeView, /captureOrientationListener\.disable\(\)/);
   assert.match(nativeView, /override fun onWindowFocusChanged\(hasWindowFocus: Boolean\)[\s\S]*if \(hasWindowFocus\) \{[\s\S]*lockHostActivityToPortrait\(\)/);
-  assert.match(nativeView, /resolveCameraRotationDegrees\(cameraId: Int\)/);
+  assert.match(nativeView, /resolveCameraDisplayOrientationDegrees\(cameraId: Int\)/);
+  assert.match(nativeView, /resolveCameraCaptureRotationDegrees\(cameraId: Int\)/);
   assert.match(nativeView, /currentDisplayRotationDegrees\(\)/);
+  assert.match(nativeView, /currentCaptureOrientationDegrees\(\)/);
+  assert.match(nativeView, /roundDeviceOrientationDegrees\(orientation: Int\)/);
   assert.match(nativeView, /CAMERA_FACING_FRONT/);
-  assert.match(nativeView, /setDisplayOrientation\(resolveCameraRotationDegrees\(activeCameraId\)\)/);
-  assert.match(nativeView, /setRotation\(resolveCameraRotationDegrees\(activeCameraId\)\)/);
+  assert.match(nativeView, /setDisplayOrientation\(resolveCameraDisplayOrientationDegrees\(activeCameraId\)\)/);
+  assert.match(nativeView, /setRotation\(resolveCameraCaptureRotationDegrees\(activeCameraId\)\)/);
+  assert.match(nativeView, /val mirroredResult = \(info\.orientation \+ displayRotationDegrees\) % 360[\s\S]*\(360 - mirroredResult\) % 360/);
+  assert.match(nativeView, /val captureOrientationDegrees = currentCaptureOrientationDegrees\(\)/);
+  assert.match(nativeView, /resolveCameraCaptureRotationDegrees\(cameraId: Int\)[\s\S]*\(info\.orientation - captureOrientationDegrees \+ 360\) % 360/);
+  assert.match(nativeView, /resolveCameraCaptureRotationDegrees\(cameraId: Int\)[\s\S]*\(info\.orientation \+ captureOrientationDegrees\) % 360/);
   assert.match(nativeView, /takePicture/);
   assert.match(nativeView, /private var pictureSize = XycSize\(1920, 1080\)/);
   assert.match(nativeView, /const val MAX_PHOTO_SIZE_PIXELS = 6_000_000/);
@@ -931,8 +1456,33 @@ test('xyc-markvideo Android native view uses camera preview, photo, and 30fps re
   assert.match(nativeView, /activeWatermark/);
   assert.match(nativeView, /drawWatermarkOnPhoto/);
   assert.match(nativeView, /cachedImageBitmap: Bitmap\?/);
+  assert.match(nativeView, /val frozenCameraFacing = activeCameraFacing\(\)/);
+  assert.match(nativeView, /writePhotoWithWatermark\(file, data, frozenWatermark, frozenWatermarkBitmap, frozenCameraFacing\)/);
+  assert.match(nativeView, /cameraFacing: String/);
+  assert.match(nativeView, /val needsFrontCameraUnmirror = cameraFacing == UI_CAMERA_FRONT/);
+  assert.match(nativeView, /if \(watermark == null && !needsFrontCameraUnmirror\) \{/);
   assert.match(nativeView, /readExifRotationDegrees/);
   assert.match(nativeView, /applyExifOrientation/);
+  assert.match(nativeView, /applyFrontCameraOutputMirror\(orientedBitmap, cameraFacing\)/);
+  assert.match(nativeView, /private fun applyFrontCameraOutputMirror\(source: Bitmap, cameraFacing: String\): Bitmap/);
+  assert.match(nativeView, /private var recordingCameraFacing = UI_CAMERA_BACK/);
+  assert.match(nativeView, /private var reusableMirroredVideoFrame: Bitmap\? = null/);
+  assert.match(nativeView, /recordingCameraFacing = activeCameraFacing\(\)/);
+  assert.match(nativeView, /val frozenCameraFacing = recordingCameraFacing/);
+  assert.match(nativeView, /val frameCameraFacing = recordingCameraFacing/);
+  assert.match(nativeView, /applyFrontCameraFrameMirrorIfNeeded\(targetBitmap, frameCameraFacing\)/);
+  assert.match(nativeView, /applyFrontCameraFrameMirrorIfNeeded\(targetBitmap, cameraFacing\)/);
+  assert.match(nativeView, /private fun applyFrontCameraFrameMirrorIfNeeded\(target: Bitmap, cameraFacing: String\)/);
+  assert.match(nativeView, /reusableMirroredVideoFrame\?\.takeIf/);
+  assert.match(nativeView, /Canvas\(mirrorFrame\)\.drawBitmap\(target, frontCameraMirrorMatrix\(target\.width\), null\)/);
+  assert.match(nativeView, /Canvas\(target\)\.drawBitmap\(mirrorFrame, 0f, 0f, null\)/);
+  assert.match(nativeView, /ensureVideoFrameBeforeFinish\(recorder, frozenWatermark, frozenWatermarkBitmap, frozenWatermarkOverlay, cameraFacing\)/);
+  assert.match(nativeView, /if \(cameraFacing != UI_CAMERA_FRONT\) \{[\s\S]*return source[\s\S]*\}/);
+  assert.match(nativeView, /private fun activeCameraFacing\(\): String/);
+  assert.match(nativeView, /Camera\.getCameraInfo\(activeCameraId, info\)/);
+  assert.match(nativeView, /private fun frontCameraMirrorMatrix\(width: Int\): Matrix/);
+  assert.match(nativeView, /matrix\.postScale\(-1f, 1f\)/);
+  assert.match(nativeView, /matrix\.postTranslate\(width\.toFloat\(\), 0f\)/);
   assert.match(nativeView, /ioHandler\.post/);
   assert.match(nativeView, /视频保存中/);
   assert.match(nativeView, /BitmapFactory\.decodeByteArray/);
@@ -940,7 +1490,7 @@ test('xyc-markvideo Android native view uses camera preview, photo, and 30fps re
   assert.match(nativeView, /compress\(Bitmap\.CompressFormat\.JPEG, PHOTO_JPEG_QUALITY, output\)/);
   assert.match(nativeView, /val decodeOptions = BitmapFactory\.Options\(\)\.apply \{[\s\S]*inPreferredConfig = Bitmap\.Config\.ARGB_8888[\s\S]*inMutable = true/);
   assert.match(nativeView, /BitmapFactory\.decodeByteArray\(data, 0, data\.size, decodeOptions\)/);
-  assert.match(nativeView, /ensureMutableBitmap\(orientedBitmap\)/);
+  assert.match(nativeView, /val cameraAlignedBitmap = applyFrontCameraOutputMirror\(orientedBitmap, cameraFacing\)[\s\S]*val outputBitmap = ensureMutableBitmap\(cameraAlignedBitmap\)[\s\S]*drawWatermarkOnPhoto\(Canvas\(outputBitmap\)/);
   assert.match(nativeView, /watermarkOutputTransform\(outputWidth, outputHeight, watermark\)/);
   assert.match(nativeView, /WatermarkOutputTransform/);
   assert.match(nativeView, /val outputToPreviewScale = max\(previewWidth \/ max\(1f, outputWidth\.toFloat\(\)\), previewHeight \/ max\(1f, outputHeight\.toFloat\(\)\)\)/);
@@ -950,7 +1500,10 @@ test('xyc-markvideo Android native view uses camera preview, photo, and 30fps re
   assert.match(nativeView, /val left = \(\(transform\.previewWidth \* watermark\.positionX \+ transform\.previewOffsetX\) \* transform\.previewToOutputScale\)/);
   assert.match(nativeView, /val top = \(\(transform\.previewHeight \* watermark\.positionY \+ transform\.previewOffsetY\) \* transform\.previewToOutputScale\)/);
   assert.match(nativeView, /Paint\(Paint\.ANTI_ALIAS_FLAG\)\.apply \{[\s\S]*isFilterBitmap = true[\s\S]*isDither = true/);
-  assert.match(nativeView, /canvas\.scale\(1f, -1f, imageRect\.centerX\(\), imageRect\.centerY\(\)\)[\s\S]*canvas\.drawBitmap\(imageBitmap, null, imageRect, imagePaint\)/);
+  assert.match(nativeView, /val hasTitle = watermark\.mainTitleText\.isNotBlank\(\)[\s\S]*val hasSubtitle = watermark\.subtitleText\.isNotBlank\(\)[\s\S]*val contentRight = rect\.right - padding/);
+  assert.match(nativeView, /val imageLeft = if \(!hasTitle && !hasSubtitle\) \{[\s\S]*contentLeft \+ max\(0f, \(contentRight - contentLeft - imageWidth\) \/ 2f\)[\s\S]*\} else \{[\s\S]*contentLeft[\s\S]*\}/);
+  assert.match(nativeView, /val imageRect = RectF\(imageLeft, imageTop, imageLeft \+ imageWidth, imageTop \+ imageHeight\)/);
+  assert.doesNotMatch(nativeView, /canvas\.scale\(1f, -1f, imageRect\.centerX\(\), imageRect\.centerY\(\)\)/);
   assert.match(nativeView, /Paint\(Paint\.ANTI_ALIAS_FLAG or Paint\.SUBPIXEL_TEXT_FLAG\)/);
   assert.doesNotMatch(nativeView, /val scale = min\(outputWidth \/ watermark\.previewWidth, outputHeight \/ watermark\.previewHeight\)/);
   assert.doesNotMatch(nativeView, /val boxWidth = outputWidth \* watermark\.boxWidth \* watermark\.scale/);
@@ -971,7 +1524,7 @@ test('xyc-markvideo Android native view uses camera preview, photo, and 30fps re
   assert.match(nativeView, /stopVideoFrameLoop\(cancelPending = false\)/);
   assert.match(nativeView, /finishRecordWhenFramesIdle\(/);
   assert.match(nativeView, /if \(\(!recording && !recordingStopRequested\) \|\| \(!videoFrameLoopRunning && !recordingStopRequested\)\) \{/);
-  assert.match(nativeView, /ensureVideoFrameBeforeFinish\(recorder, frozenWatermark, frozenWatermarkBitmap, frozenWatermarkOverlay\)/);
+  assert.match(nativeView, /ensureVideoFrameBeforeFinish\(recorder, frozenWatermark, frozenWatermarkBitmap, frozenWatermarkOverlay, cameraFacing\)/);
   assert.match(nativeView, /RECORD_STAGE_WATERMARK_DRAW = "watermark_draw"/);
   assert.match(nativeView, /RECORD_STAGE_BITMAP_TO_YUV = "bitmap_to_yuv"/);
   assert.match(nativeView, /RECORD_STAGE_VIDEO_INPUT_BUFFER = "video_input_buffer"/);
@@ -984,12 +1537,14 @@ test('xyc-markvideo Android native view uses camera preview, photo, and 30fps re
   assert.match(nativeView, /recordingFrameErrorStage = ""/);
   assert.match(nativeView, /recordingFrameSkipStage = ""/);
   assert.match(nativeView, /quitIoThreadAfterRecordStop = false/);
+  assert.doesNotMatch(nativeView, /recordingCameraFacing = UI_CAMERA_BACK[\s\S]{0,120}recycleBitmap\(reusableMirroredVideoFrame\)/);
+  assert.match(nativeView, /private fun recycleReusableVideoFrame\(\) \{[\s\S]*reusableVideoFrame\?\.recycle\(\)[\s\S]*recycleBitmap\(reusableMirroredVideoFrame\)[\s\S]*reusableMirroredVideoFrame = null/);
   assert.match(nativeView, /recordingWatermarkOverlay: WatermarkOverlay\? = null/);
   assert.match(nativeView, /createVideoWatermarkOverlay\(recordingSize, frozenWatermark, frozenWatermarkBitmap\)/);
   assert.match(nativeView, /recordingWatermarkOverlay = frozenWatermarkOverlay/);
   assert.match(nativeView, /val frameWatermarkOverlay = recordingWatermarkOverlay/);
   assert.match(nativeView, /drawWatermarkOverlay\(targetBitmap, frameWatermarkOverlay\)/);
-  assert.match(nativeView, /ensureVideoFrameBeforeFinish\(recorder, frozenWatermark, frozenWatermarkBitmap, frozenWatermarkOverlay\)/);
+  assert.doesNotMatch(nativeView, /canvas\.scale\(1f, -1f, imageRect\.centerX\(\), imageRect\.centerY\(\)\)/);
   assert.match(nativeView, /private data class WatermarkOverlay\(val bitmap: Bitmap, val dirtyRect: Rect\)/);
   assert.match(nativeView, /private fun createVideoWatermarkOverlay\([\s\S]*val dirtyRect = watermarkDirtyRect\(size\.width, size\.height, watermark\)[\s\S]*Bitmap\.createBitmap\(dirtyRect\.width\(\), dirtyRect\.height\(\), Bitmap\.Config\.ARGB_8888\)/);
   assert.match(nativeView, /overlayCanvas\.translate\(-dirtyRect\.left\.toFloat\(\), -dirtyRect\.top\.toFloat\(\)\)[\s\S]*drawWatermarkOnPhoto/);
@@ -1029,10 +1584,33 @@ test('xyc-markvideo Android native view uses camera preview, photo, and 30fps re
   assert.doesNotMatch(nativeView, /VideoSource\.CAMERA/);
   assert.match(nativeView, /requestedFlashMode = UI_FLASH_OFF/);
   assert.match(nativeView, /requestedZoomMode = UI_ZOOM_1X/);
+  assert.match(nativeView, /requestedCameraFacing = UI_CAMERA_BACK/);
   assert.match(nativeView, /val nextMode = if \(mode == "video"\) "video" else "photo"/);
   assert.match(nativeView, /if \(nextMode == currentMode\) \{[\s\S]*return[\s\S]*currentMode = nextMode/);
   assert.match(nativeView, /fun setFlashMode\(mode: String\): String/);
   assert.match(nativeView, /fun setZoomMode\(mode: String\): String/);
+  assert.match(nativeView, /fun switchCamera\(\): String/);
+  assert.match(nativeView, /fun openSystemAlbum\(mediaUri: String\): String/);
+  assert.match(nativeView, /Intent\(Intent\.ACTION_VIEW, targetUri\)/);
+  assert.match(nativeView, /addFlags\(Intent\.FLAG_ACTIVITY_NEW_TASK\)/);
+  assert.match(nativeView, /context\.startActivity\(intent\)/);
+  assert.match(nativeView, /lastPublishedMediaUri/);
+  assert.match(nativeView, /lastPublishedMediaKind/);
+  assert.match(nativeView, /lastPublishedAlbumUri/);
+  assert.match(nativeView, /private fun rememberPublishedMedia\(albumResult: AlbumSaveResult, kind: String\)/);
+  assert.match(nativeView, /private fun albumOpenUri\(mediaUri: String\): Uri/);
+  assert.match(nativeView, /private fun albumOpenMimeType\(mediaUri: String\): String/);
+  assert.match(nativeView, /return Uri\.parse\(preferredUri\)/);
+  assert.match(nativeView, /Intent\.FLAG_GRANT_READ_URI_PERMISSION/);
+  assert.match(nativeView, /if \(recording \|\| recordingStopRequested \|\| photoBusy\) \{[\s\S]*failAndEmit\("1105", "拍摄或保存中不能切换摄像头", "switchCamera while busy"\)/);
+  assert.match(nativeView, /val previousFacing = requestedCameraFacing/);
+  assert.match(nativeView, /val nextFacing = nextCameraFacing\(previousFacing\)/);
+  assert.match(nativeView, /val targetCameraId = resolveCameraIdForFacing\(nextFacing\)/);
+  assert.match(nativeView, /requestedCameraFacing = nextFacing/);
+  assert.match(nativeView, /requestedZoomMode = UI_ZOOM_1X/);
+  assert.match(nativeView, /if \(requestedCameraFacing == UI_CAMERA_FRONT\) \{[\s\S]*requestedFlashMode = UI_FLASH_OFF/);
+  assert.match(nativeView, /requestedCameraFacing = previousFacing[\s\S]*requestedZoomMode = previousZoomMode[\s\S]*requestedFlashMode = previousFlashMode/);
+  assert.match(nativeView, /emit\("camerachange", data\)/);
   assert.match(nativeView, /val normalizedMode = normalizeFlashMode\(mode\)/);
   assert.match(nativeView, /val normalizedMode = normalizeZoomMode\(mode\)/);
   assert.match(nativeView, /\.put\("requestedFlashMode", normalizedMode\)/);
@@ -1040,6 +1618,8 @@ test('xyc-markvideo Android native view uses camera preview, photo, and 30fps re
   assert.match(nativeView, /\.put\("applied", applied\)/);
   assert.match(nativeView, /unsupportedFlashModeMessage/);
   assert.match(nativeView, /unsupportedZoomModeMessage/);
+  assert.match(nativeView, /unsupportedCameraFacingMessage/);
+  assert.match(nativeView, /cameraSwitchPayload/);
   assert.match(nativeView, /camera \?: return requestedFlashMode == UI_FLASH_OFF/);
   assert.match(nativeView, /camera \?: return requestedZoomMode == UI_ZOOM_1X/);
   assert.match(nativeView, /supportedFlashModes/);
@@ -1063,17 +1643,26 @@ test('xyc-markvideo Android native view uses camera preview, photo, and 30fps re
   assert.match(nativeView, /applyZoomModeToParameters\(parameters, false\)/);
   assert.match(nativeView, /applyZoomModeIfCameraOpen\(false\)/);
   assert.match(nativeView, /resolveCameraIdForZoomMode\(requestedZoomMode\)/);
+  assert.match(nativeView, /resolveCameraIdForFacing\(facing: String\)/);
+  assert.match(nativeView, /findFrontCameraId\(\)/);
+  assert.match(nativeView, /findCameraIdByFacing\(Camera\.CameraInfo\.CAMERA_FACING_FRONT\)/);
+  assert.match(nativeView, /if \(requestedCameraFacing == UI_CAMERA_FRONT\) \{[\s\S]*return findFrontCameraId\(\)/);
   assert.match(nativeView, /resolveWideBackCameraId\(\)/);
   assert.match(nativeView, /Wide camera is not exposed by Camera1/);
-  assert.match(nativeView, /if \(resolveWideBackCameraId\(\) >= 0\) \{[\s\S]*modes\.put\(UI_ZOOM_WIDE\)/);
+  assert.match(nativeView, /if \(requestedCameraFacing == UI_CAMERA_BACK && resolveWideBackCameraId\(\) >= 0\) \{[\s\S]*modes\.put\(UI_ZOOM_WIDE\)/);
   assert.match(nativeView, /zoomModesPayload/);
+  assert.match(nativeView, /cameraFacingsPayload/);
+  assert.match(nativeView, /\.put\("cameraFacing", activeCameraFacing\(\)\)/);
+  assert.match(nativeView, /\.put\("availableCameraFacings", cameraFacingsPayload\(\)\)/);
+  assert.match(nativeView, /const val UI_CAMERA_BACK = "back"/);
+  assert.match(nativeView, /const val UI_CAMERA_FRONT = "front"/);
   assert.match(nativeView, /if \(muxerStarted && videoSampleCount > 0\) \{[\s\S]*muxer\?\.stop\(\)/);
   assert.match(nativeView, /muxer\?\.release\(\)/);
   assert.match(nativeView, /throw stageFailure\(RECORD_STAGE_VIDEO_EOS, IllegalStateException\("Timed out waiting for video encoder input buffer\."\)\)/);
   assert.match(nativeView, /writeMuxerSample\(activeMuxer, videoTrackIndex, encodedData, bufferInfo, RECORD_STAGE_MUXER_WRITE_VIDEO_SAMPLE\)/);
   assert.match(nativeView, /targetFps = fps/);
   assert.match(nativeView, /DEFAULT_TARGET_FPS = 30/);
-  assert.match(nativeView, /chooseCameraSize\(sizes: List<Camera\.Size>\?\)/);
+  assert.match(nativeView, /chooseCameraSize\(sizes: List<Camera\.Size>\?, targetSize: XycSize\? = null\)/);
   assert.match(nativeView, /sizeFitsQualityCap\(it\.width, it\.height\)/);
   assert.match(nativeView, /private fun shouldRotateRecordingOutput\(\): Boolean/);
   assert.match(nativeView, /val sourceWidth = if \(shouldRotateRecordingOutput\(\)\) videoSize\.height else videoSize\.width/);
@@ -1084,8 +1673,10 @@ test('xyc-markvideo Android native view uses camera preview, photo, and 30fps re
   assert.match(nativeView, /MAX_CAMERA_SIZE_PIXELS = 2_073_600/);
   assert.match(nativeView, /MAX_PHOTO_SIZE_LONG_EDGE = 3000/);
   assert.match(nativeView, /MAX_PHOTO_SIZE_PIXELS = 6_000_000/);
+  assert.match(nativeView, /CAMERA_FRAME_ASPECT_SHORT_EDGE = 3f/);
+  assert.match(nativeView, /CAMERA_FRAME_ASPECT_LONG_EDGE = 4f/);
   assert.match(nativeView, /PHOTO_JPEG_QUALITY = 90/);
-  assert.match(nativeView, /\.filter \{ max\(it\.width, it\.height\) <= MAX_PHOTO_SIZE_LONG_EDGE && it\.width \* it\.height <= MAX_PHOTO_SIZE_PIXELS \}[\s\S]*\.maxByOrNull \{ it\.width \* it\.height \}[\s\S]*\?: available\.minByOrNull \{ it\.width \* it\.height \}/);
+  assert.match(nativeView, /val targetAspect = targetCameraFrameAspect\(\)[\s\S]*compareBy<Camera\.Size> \{ aspectDelta\(it\.width, it\.height, targetAspect\) \}[\s\S]*\.thenByDescending \{ it\.width \* it\.height \}/);
   assert.match(nativeView, /MAX_RECORDING_LONG_EDGE = 1440/);
   assert.match(nativeView, /MAX_RECORDING_PIXELS = 1_166_400/);
   assert.match(nativeView, /WATERMARK_OVERLAY_DIRTY_PADDING_PX = 4/);
@@ -1112,6 +1703,12 @@ test('xyc-markvideo Android native view uses camera preview, photo, and 30fps re
   assert.match(nativeView, /recordPermissionRetryCount/);
   assert.match(nativeView, /statusView\.visibility/);
   assert.match(nativeView, /MediaStore/);
+  assert.match(nativeView, /createVideoThumbnail\(outputTarget\)/);
+  assert.match(nativeView, /MediaMetadataRetriever/);
+  assert.match(nativeView, /\.put\("thumbnailPath", thumbnailPath\)/);
+  assert.match(nativeView, /\.put\("mediaKind", kind\)/);
+  assert.match(nativeView, /appendAlbumSuccess\(dataPayload, albumResult, "照片已保存到相册", "photo"\)/);
+  assert.match(nativeView, /appendAlbumSuccess\(data, albumResult, "视频已保存到相册", "video"\)/);
   assert.match(nativeView, /private var recordingOutputSize = XycSize\(1280, 720\)/);
   assert.match(nativeView, /private var videoOutputTarget: VideoOutputTarget\? = null/);
   assert.match(nativeView, /val recordTarget = createVideoOutputTarget\(\)/);
@@ -1184,13 +1781,22 @@ test('watermark PRD documents the staged Android delivery contract', async () =>
 
   assert.match(prd, /pages\/index\/index\.nvue/);
   assert.match(prd, /pages\/cameraX\/index\.nvue/);
-  assert.match(prd, /\/static\/watermark\/logo2\.png/);
+  assert.match(prd, /\/static\/watermark\/logo3\.png/);
   assert.match(prd, /最多 1 个/);
   assert.match(prd, /双指捏合缩放/);
   assert.match(prd, /右下角缩放图标作为贴纸缩放提示/);
   assert.match(prd, /左上角按钮每次旋转 90 度/);
   assert.match(prd, /松手、拍照前和录像前必须 flush 最新水印/);
-  assert.match(prd, /内容及编辑控件不得超出预览可编辑区域/);
+  assert.match(prd, /固定画幅合同/);
+  assert.match(prd, /原生相机画幅目标固定为 4:3/);
+  assert.match(prd, /竖屏预览为 3:4/);
+  assert.match(prd, /预览、拍照、录像和水印坐标必须共享同一个画幅模型/);
+  assert.match(prd, /尺寸上限不得改变 4:3 目标/);
+  assert.match(prd, /相机视角为顶部白色控制区和底部白色控制区之间的居中 3:4 区域/);
+  assert.match(prd, /内容及编辑控件不得超出相机视角可编辑区域/);
+  assert.match(prd, /拍照键左侧展示最近一次拍照或录像缩略图，点击打开本机相册；右侧入口为水印设置/);
+  assert.doesNotMatch(prd, /系统相册跳转先保留占位提示/);
+  assert.doesNotMatch(prd, /拍照键左侧入口打开本次拍照\/录像结果缓存弹层/);
   assert.match(prd, /编辑控件不随内容旋转/);
   assert.match(prd, /照片输出/);
   assert.match(prd, /PixelCopy/);
@@ -1199,16 +1805,11 @@ test('watermark PRD documents the staged Android delivery contract', async () =>
   assert.match(prd, /watermarkVideoBurnIn=true/);
 });
 
-test('xyc-markvideo Android manifest declares camera and microphone permissions', async () => {
-  const androidManifest = await readFile(
-    path.join(root, 'uni_modules/xyc-markvideo/utssdk/app-android/AndroidManifest.xml'),
-    'utf8',
+test('xyc-markvideo avoids plugin Android manifest so standard base uses app permissions', async () => {
+  await assert.rejects(
+    readFile(path.join(root, 'uni_modules/xyc-markvideo/utssdk/app-android/AndroidManifest.xml'), 'utf8'),
+    /ENOENT/,
   );
-
-  assert.match(androidManifest, /android\.permission\.CAMERA/);
-  assert.match(androidManifest, /android\.permission\.RECORD_AUDIO/);
-  assert.match(androidManifest, /android\.permission\.WRITE_EXTERNAL_STORAGE/);
-  assert.match(androidManifest, /android:maxSdkVersion="28"/);
 });
 
 test('Vue 3 app entry is still declared in manifest', async () => {

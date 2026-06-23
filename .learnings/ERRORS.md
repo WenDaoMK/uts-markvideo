@@ -4,6 +4,36 @@ Command failures and integration errors.
 
 ---
 
+## [ERR-20260623-002] python_default_missing_pillow
+
+**Logged**: 2026-06-22T17:53:51Z
+**Priority**: medium
+**Status**: pending
+**Area**: infra
+
+### Summary
+默认系统 Python 没有 Pillow，导致截图模板匹配脚本第一次失败。
+
+### Error
+```text
+ModuleNotFoundError: No module named 'PIL'
+```
+
+### Context
+- Operation: 运行临时截图模板比对脚本，判断水印 logo 是否与 normal/vflip 版本匹配。
+- Environment: 默认 `python3`，不是 Codex workspace bundled Python。
+- Impact: 额外花了一轮才切到 bundled Python 执行图像分析。
+
+### Suggested Fix
+图像分析或脚本验证优先使用 `load_workspace_dependencies` 提供的 bundled Python 路径，或先检查 Pillow 是否可用。
+
+### Metadata
+- Reproducible: yes
+- Related Files: screenshots/, static/watermark/logo2.png
+- See Also: LRN-20260623-C14
+
+---
+
 ## [ERR-20260622-C01] macos_timeout_command_missing
 
 **Logged**: 2026-06-22T22:04:00+08:00
@@ -190,5 +220,145 @@ Remove `margin-left/right: auto`; center fixed-width controls through a full-wid
 - **Resolved**: 2026-06-21T15:40:38Z
 - **Commit/PR**: pending
 - **Notes**: Current source no longer contains `margin auto`; regression guard added to `test/structure.test.mjs`.
+
+---
+
+## [ERR-20260623-001] watermark_pinch_flicker_regression
+
+**Logged**: 2026-06-23T00:38:22+08:00
+**Priority**: critical
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+修水印放大裁剪时，不能让 nvue `movable-view` 移动根在 pinch move 中每帧跟随预览帧，否则会出现严重忽大忽小闪烁。
+
+### Error
+```text
+捏合放大缩小会抽搐：水印一会儿大、一会儿小，并且闪烁。
+```
+
+### Context
+- Operation: Android 真机相机页水印双指捏合缩放。
+- Surface: `pages/cameraX/index.nvue`
+- Trigger: C12 防裁剪方案让 `watermarkMoveX/Y` 和 `watermarkBoxStyle` 每帧读取 `watermarkPinchPreviewFrame()` / `commitFrame`，反向驱动原生 `movable-view` 根的 `x/y/width/height`。
+- Root cause: nvue 原生 `movable-view` 本身也在处理手势状态，页面再用预览帧每帧改移动根布局，会和原生手势互相抢状态，导致缩放忽大忽小。
+- Correct route: pinch 期间把 `movable-view` 固定成整个水印编辑区域画布，`x/y` 固定为 `0`；只让内部 `watermarkTransformBox` 读取 `watermarkPinchPreviewFrame()` 来定位和变大。
+
+### Suggested Fix
+保持三层分工：`movable-area` 是编辑范围；pinch 期间 `movable-view` 是稳定全区域画布；`watermarkTransformBox` 才是读取预览帧并变化的视觉层。禁止恢复 `return this.watermarkMovePositionFromFrame(pinchFrame).x/y` 或在 `updateWatermarkPinch()` 中调用 `updateWatermarkFrame()`、`scheduleWatermarkSync()`、`syncWatermarkToNative()`、`flushWatermarkSync()`。
+
+### Metadata
+- Reproducible: yes
+- Related Files: pages/cameraX/index.nvue, test/structure.test.mjs, .learnings/LEARNINGS.md
+- See Also: LRN-20260623-C13, LRN-20260622-C12, LRN-20260622-C10
+
+### Resolution
+- **Resolved**: 2026-06-23T00:38:22+08:00
+- **Commit/PR**: pending
+- **Notes**: Code-level fix added: `watermarkMoveX/Y` return `0` during pinch, root size is the edit area, visual transform box reads the preview frame. `npm test` and `git diff --check` passed; N9500 true-device confirmation is still required.
+
+---
+
+## [ERR-20260623-002] front_camera_preview_upside_down
+
+**Logged**: 2026-06-23T11:01:56+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+Android Camera1 前置摄像头预览不能和拍照 JPEG rotation 共用同一个旋转公式，否则切到前摄后人物可能上下颠倒。
+
+### Error
+```text
+切换的前置摄像头人物是上下颠倒的。
+```
+
+### Context
+- Operation: Android 真机相机页切换到前置摄像头。
+- Surface: `uni_modules/xyc-markvideo/utssdk/app-android/XycNativeCameraView.kt`
+- Trigger: `setDisplayOrientation()` 和 `Camera.Parameters.setRotation()` 共用 `resolveCameraRotationDegrees()`。
+- Root cause: Camera1 前置预览需要按 `setDisplayOrientation()` 的前摄镜像补偿公式处理；JPEG capture rotation 仍是另一套公式。共用函数把前摄预览角度算反。
+
+### Suggested Fix
+保留两个函数：`resolveCameraDisplayOrientationDegrees()` 专门给 `setDisplayOrientation()`，前摄用 `(360 - ((orientation + displayRotation) % 360)) % 360`；`resolveCameraCaptureRotationDegrees()` 专门给 `parameters.setRotation()`，不要再合并。
+
+### Metadata
+- Reproducible: yes
+- Related Files: uni_modules/xyc-markvideo/utssdk/app-android/XycNativeCameraView.kt, test/structure.test.mjs
+- See Also: LRN-20260623-C14
+
+### Resolution
+- **Resolved**: 2026-06-23T11:01:56+08:00
+- **Commit/PR**: pending
+- **Notes**: Split preview display orientation from capture rotation and added structure tests for both formulas. `npm test` and `git diff --check` passed; Android true-device confirmation is still required.
+
+---
+
+## [ERR-20260623-003] hbuilderx_android_compile_no_progress
+
+**Logged**: 2026-06-23T11:14:36+08:00
+**Priority**: medium
+**Status**: pending
+**Area**: infra
+
+### Summary
+HBuilderX Android compile-mode CLI can hang after printing only the version line, so it must not be counted as a successful compile verification.
+
+### Error
+```text
+11:14:36.891 HBuilderX Version: 5.07
+```
+
+### Context
+- Command: `/Applications/HBuilderX.app/Contents/MacOS/cli launch app-android --project /Users/chaixixi/od/uts-markvideo --compile true --continue-on-error false --pagePath pages/cameraX/index`
+- Result: no compile success/failure output after roughly two minutes; command was interrupted with Ctrl-C.
+- Follow-up: `cli lsp lint --file .../XycNativeCameraView.kt --project /Users/chaixixi/od/uts-markvideo --platform app-android` returned `Cannot read properties of null (reading 'start')` instead of native diagnostics.
+- Impact: UTS/Kotlin syntax for `XycNativeCameraView.kt` still needs HBuilderX or true-device compile confirmation outside Node structure tests.
+
+### Suggested Fix
+Use HBuilderX IDE run-to-Android or a known-good CLI session with device/IDE state ready before treating native plugin compilation as verified. Keep `npm test` and `git diff --check` as narrow static checks only.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: uni_modules/xyc-markvideo/utssdk/app-android/XycNativeCameraView.kt, pages/cameraX/index.nvue
+- See Also: LRN-20260623-C17
+
+---
+
+## [ERR-20260623-004] front_camera_photo_left_right_mirrored
+
+**Logged**: 2026-06-23T11:26:37+08:00
+**Priority**: high
+**Status**: pending
+**Area**: frontend
+
+### Summary
+前置摄像头成片左右颠倒，因为输出保存路径只处理了方向旋转，没有对前摄源图/源帧做水平反镜像。
+
+### Error
+```text
+前置的摄像头的成片还是左右颠倒的。
+```
+
+### Context
+- Operation: Android 真机相机页切换前摄后拍摄并查看相册成片。
+- Surface: `uni_modules/xyc-markvideo/utssdk/app-android/XycNativeCameraView.kt`
+- Root cause: 初次修复只冻结了 `requestedCameraFacing`，真机反馈说明前摄成片仍可能没有进入正确的反镜像分支，或还需要设备侧确认实际帧方向。
+- Correct route: freeze the actual active camera facing from `activeCameraId`, apply front-camera horizontal unmirror before drawing watermark and before JPEG/video encoding, then verify on a real Android device.
+
+### Suggested Fix
+Keep the front-camera output transform before watermark drawing for both photo and recording frames. Use the active camera id as the source of truth for front/back state; do not solve this by flipping the final full bitmap after watermark burn-in, because that would mirror watermark text too.
+
+### Metadata
+- Reproducible: yes
+- Related Files: uni_modules/xyc-markvideo/utssdk/app-android/XycNativeCameraView.kt, test/structure.test.mjs
+- See Also: LRN-20260623-C18, ERR-20260623-002
+
+### Resolution
+- **Resolved**: pending true-device verification
+- **Commit/PR**: pending
+- **Notes**: Added `applyFrontCameraOutputMirror()` for photos, `applyFrontCameraFrameMirrorIfNeeded()` for recording frames, switched the capture-time facing snapshot to `activeCameraFacing()`, and kept regression guards in `test/structure.test.mjs`. True-device confirmation is still required.
 
 ---

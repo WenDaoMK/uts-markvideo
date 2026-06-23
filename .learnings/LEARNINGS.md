@@ -6,6 +6,236 @@ Corrections, insights, and knowledge gaps captured during development.
 
 ---
 
+## [LRN-20260623-C14] correction
+
+**Logged**: 2026-06-22T17:53:51Z
+**Priority**: high
+**Status**: pending
+**Area**: frontend
+
+### Summary
+水印内容里的 logo 图片上下颠倒时，不要误判成右下角缩放手柄图标问题。
+
+### Details
+用户纠正“不是手柄图标，而是水印当中的图片上下颠倒”。截图裁剪对比显示，页面预览和照片烧录里的小圆 logo 更接近 `logo2.png` 的上下翻转版本。`logo2.png` 带 `eXIf` chunk，但解析后只包含尺寸信息，没有 Orientation 标签；修复点应放在水印图片本体的渲染/绘制层，而不是改素材、手柄图标或整个水印容器。
+
+### Suggested Action
+后续处理水印图片方向问题时，先裁剪截图里的 logo 与当前源图 normal/vflip 做对比；只有确认当前素材在页面预览和 Android 输出都相对源图倒置时，才允许在图片本体渲染层做局部翻转。换素材后必须重新验证方向，不能沿用旧素材的补偿翻转。不要把翻转加到整个水印内容层，否则文字也会倒。参见 LRN-20260623-C23。
+
+### Metadata
+- Source: user_feedback
+- Related Files: pages/cameraX/index.nvue, uni_modules/xyc-markvideo/utssdk/app-android/XycNativeCameraView.kt, test/structure.test.mjs, static/watermark/logo2.png
+- Tags: watermark, image-orientation, android, nvue, canvas
+- Pattern-Key: uts_markvideo.watermark_logo_vertical_flip
+- Recurrence-Count: 1
+- First-Seen: 2026-06-23
+- Last-Seen: 2026-06-23
+
+### Resolution
+- **Resolved**: 2026-06-22T17:53:51Z
+- **Commit/PR**: pending
+- **Notes**: Added local image flip in the nvue preview image style and Android canvas watermark image draw path. `npm test` passed.
+
+---
+
+## [LRN-20260623-C16] correction
+
+**Logged**: 2026-06-23T01:18:58+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+nvue 真机上，`<text>` 图标能稳定显示，但 `<image>` 加 SVG 不能想当然地认为一定可见。
+
+### Details
+用户指出红色关闭按钮能显示，而缩放图标只剩橙色底球、内部没有描边。根因不是颜色本身，而是当前 nvue 真机对 `<image src="...svg">` 的渲染路径没有稳定画出 SVG path。`<text>` 之所以可见，是因为它走的是原生文本渲染通道。要做稳定悬浮图标，优先用原生 `view`/`text` 组合，而不是依赖 SVG image 解码。
+
+### Suggested Action
+后续在 `cameraX` 页做悬浮按钮、角标、控件图标时，先区分是文本、纯 `view` 还是 `image/SVG` 通道；对真机 nvue 来说，能稳定显示的优先级应是 `text` > 原生 `view` 线段 > SVG image。
+
+### Metadata
+- Source: user_feedback
+- Related Files: pages/cameraX/index.nvue, test/structure.test.mjs
+- Tags: nvue, image-rendering, svg, text-rendering, icon
+- See Also: LRN-20260623-C15, LRN-20260623-C14
+- Pattern-Key: uts_markvideo.nvue_text_vs_svg_rendering
+- Recurrence-Count: 1
+- First-Seen: 2026-06-23
+- Last-Seen: 2026-06-23
+
+### Resolution
+- **Resolved**: 2026-06-23T01:18:58+08:00
+- **Commit/PR**: pending
+- **Notes**: Resize handle now uses native `view` line segments instead of SVG `<image>`; tests passed after the switch.
+
+---
+
+## [LRN-20260623-C15] correction
+
+**Logged**: 2026-06-23T00:45:30+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+水印缩放 SVG 图标不仅要换成真实资产，还要保证真机相机预览上的颜色对比度。
+
+### Details
+用户反馈缩放 icon 仍没有正确显示，并指出可能没有考虑颜色。原实现把 SVG 描边设为 `#111917`，缩放手柄背景是半透明白色；在真机相机预览和 nvue 渲染混合下，半透明底色可能让深色细线显得不清楚。正确做法是让缩放手柄使用稳定的高对比实底色，并让 SVG 使用反色描边。
+
+### Suggested Action
+后续调整相机页悬浮控件图标时，图标资产和承载按钮背景要成组设计：避免只替换 SVG 路径而不校验前景/背景对比度。水印缩放手柄当前使用橙色实底 `#ff8a00` 和白色 SVG 描边 `#ffffff`。
+
+### Metadata
+- Source: user_feedback
+- Related Files: pages/cameraX/index.nvue, static/watermark/resize-diagonal.svg, test/structure.test.mjs
+- Tags: watermark, resize-icon, svg, contrast, nvue
+- See Also: LRN-20260622-C09, LRN-20260623-C14
+- Pattern-Key: uts_markvideo.watermark_resize_icon_contrast
+- Recurrence-Count: 1
+- First-Seen: 2026-06-23
+- Last-Seen: 2026-06-23
+
+### Resolution
+- **Resolved**: 2026-06-23T00:45:30+08:00
+- **Commit/PR**: pending
+- **Notes**: Resize handle now uses `#ff8a00`; SVG paths use `#ffffff` and `stroke-width=\"2.6\"`. Regression tests assert the high-contrast icon colors.
+
+---
+
+## [LRN-20260623-C14] correction
+
+**Logged**: 2026-06-23T00:39:22+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+当前相机主线入口是 `pages/cameraX/index.nvue`，不要回到废弃的 `pages/camera/camera.vue`。
+
+### Details
+用户纠正：本轮相机缩放图标、pinch 缩放和 HBuilderX nvue-css 编译问题都发生在 `cameraX` 主线。README 和 `pages.json` 也确认当前业务页是 `pages/cameraX/index.nvue`，旧 `pages/camera/camera.vue` 已废弃。本轮 HBuilderX 报错中的 `overflow: visible` 也是 `pages/cameraX/index.nvue` 的 nvue 样式问题。
+
+### Suggested Action
+后续处理 `uts-markvideo` 相机 UI、缩放图标、水印交互或 HBuilderX 运行日志时，先用 README 和 `pages.json` 确认当前入口；除非用户明确要求历史路线，否则不要检查或恢复 `pages/camera/camera.vue`。
+
+### Metadata
+- Source: user_feedback
+- Related Files: README.md, pages.json, pages/cameraX/index.nvue, pages/camera/camera.vue
+- Tags: cameraX, nvue, route-truth, deprecated-route
+- See Also: LRN-20260623-C13
+- Pattern-Key: uts_markvideo.cameraX_is_current_entry
+- Recurrence-Count: 1
+- First-Seen: 2026-06-23
+- Last-Seen: 2026-06-23
+
+### Resolution
+- **Resolved**: 2026-06-23T00:39:22+08:00
+- **Commit/PR**: pending
+- **Notes**: Current review and verification were anchored on `pages/cameraX/index.nvue`; old `pages/camera/camera.vue` was not used as the mainline.
+
+---
+
+## [LRN-20260622-C11] correction
+
+**Logged**: 2026-06-22T23:55:16+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+当前相机主线入口是 `pages/cameraX/index.nvue`，不要再从旧记忆推断为 `pages/camera/camera.vue`。
+
+### Details
+用户纠正：`pages/camera/camera.vue` 是历史路线，当前已经改到 `cameraX`。本仓库当前真相面以 `README.md`、`pages.json` 和实际文件为准：旧 `pages/camera/camera.vue` 路线已废弃，当前相机业务页是 `pages/cameraX/index.nvue`。历史 memory 只能作为背景线索，不能优先于当前 repo 文件。
+
+### Suggested Action
+后续处理 `uts-markvideo` 相机页、缩放、水印、拍照/录像 UI 时，先读 `README.md` 和 `pages.json` 确认入口，再进入 `pages/cameraX/index.nvue`；只有涉及旧迁移背景时才提 `pages/camera/camera.vue`。
+
+### Metadata
+- Source: user_feedback
+- Related Files: README.md, pages.json, pages/cameraX/index.nvue
+- Tags: cameraX, stale-memory, repo-truth, camera-ui
+- See Also: LRN-20260622-C09, LRN-20260622-C10
+- Pattern-Key: uts_markvideo.current_camera_entry_cameraX
+- Recurrence-Count: 1
+- First-Seen: 2026-06-22
+- Last-Seen: 2026-06-22
+
+### Resolution
+- **Resolved**: 2026-06-22T23:55:16+08:00
+- **Commit/PR**: pending
+- **Notes**: Future audits should treat `README.md` and `pages.json` as the first truth surface and route current camera UI work to `pages/cameraX/index.nvue`.
+
+---
+
+## [LRN-20260622-C09] correction
+
+**Logged**: 2026-06-22T22:45:16+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+水印右下角缩放 icon 要用真实 SVG 对角双向箭头，不能用文字符号代替。
+
+### Details
+用户先指出缩放 icon 不能是单向箭头，后续进一步指出 `⤡` 这类文字符号也不对，应该是实际 SVG/icon。`pages/cameraX/index.nvue` 的右下角缩放手柄应显示同一对角线上的双向箭头，但渲染方式必须是本地资产图标，例如 `/static/watermark/resize-diagonal.svg` 通过 `<image>` 引用。这个 icon 只是视觉提示，不应重新绑定右下角单指缩放逻辑。
+
+### Suggested Action
+后续调整水印编辑 UI 时，保留真实 SVG/icon 资产路径，不要退回 `watermarkResizeText`、`⤡` 或 `↘`。同时缩放上限只约束旋转后的可见水印内容不能超出编辑区域，删除、旋转、缩放手柄的外部占位不应参与水印内容最大缩放计算。
+
+### Metadata
+- Source: user_feedback
+- Related Files: pages/cameraX/index.nvue, static/watermark/resize-diagonal.svg, test/structure.test.mjs
+- Tags: watermark, nvue, camera-ui, resize-icon, svg-icon, scale-clamp
+- See Also: LRN-20260622-C07, LRN-20260622-C10
+- Pattern-Key: uts_markvideo.watermark_resize_svg_content_clamp
+- Recurrence-Count: 1
+- First-Seen: 2026-06-22
+- Last-Seen: 2026-06-22
+
+### Resolution
+- **Resolved**: 2026-06-22T23:27:38+08:00
+- **Commit/PR**: pending
+- **Notes**: The resize handle now renders `/static/watermark/resize-diagonal.svg` with `<image>`, and structure tests forbid text-arrow fallbacks. Scale clamping now uses visible content bounds instead of edit handle padding.
+
+---
+
+## [LRN-20260622-C10] best_practice
+
+**Logged**: 2026-06-22T23:15:45+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+nvue 水印捏合缩放时不要重建 `movable-view`，也不要把预览态写回正式水印帧或原生层。
+
+### Details
+用户反馈水印缩放“又卡又抽搐”。commit 前审计确认两个高风险点：几何量驱动的 `:key` 会在 scale 变化时重建原生 `movable-view`；`updateWatermarkPinch()` 每帧调用 `updateWatermarkFrame()` 会同步改外层 `x/y/width/height`，和原生拖拽组件争同一个手势状态。`watermarkMoveDisabled` 如果跟随 `watermarkPinchGesture` 切换，也可能让原生组件取消当前手势。
+
+### Suggested Action
+后续修改水印贴纸交互时，保持正式状态稳定：不要用 scale/rotation 生成动态 key；不要在 pinch move 中调用 `updateWatermarkFrame()`、`scheduleWatermarkSync()` 或 `setWatermark()`；缩放中的预览布局可读取 `commitFrame` 让外层盒子变大，`touchend` 后再一次性提交 frame 并同步原生。删除、旋转、缩放按钮继续作为同一移动根里的 sibling，坐标锚定未旋转编辑框角点。
+
+### Metadata
+- Source: user_feedback_and_subagent_audit
+- Related Files: pages/cameraX/index.nvue, test/structure.test.mjs
+- Tags: nvue, movable-view, watermark, pinch, performance
+- See Also: LRN-20260622-C01, LRN-20260622-C02, LRN-20260622-C07
+- Pattern-Key: uts_markvideo.watermark_pinch_stable_outer_movable
+- Recurrence-Count: 1
+- First-Seen: 2026-06-22
+- Last-Seen: 2026-06-22
+
+### Resolution
+- **Resolved**: 2026-06-22T23:15:45+08:00
+- **Commit/PR**: pending
+- **Notes**: `pages/cameraX/index.nvue` keeps official watermark state and native sync stable during pinch, removes dynamic geometry keys, and commits/syncs only after pinch end. A later clipping fix allows the preview layout box itself to grow from `commitFrame` while keeping state writes deferred.
+
+---
+
 ## [LRN-20260622-C08] correction
 
 **Logged**: 2026-06-22T22:29:31+08:00
@@ -471,5 +701,351 @@ HBuilderX 5.07 的 nvue CSS 编译器会报错：`property value auto is not sup
 - **Resolved**: 2026-06-21T15:40:38Z
 - **Commit/PR**: pending
 - **Notes**: Current `cameraX` UI uses a full-width wrapper plus flex centering for the mode switch, and tests now forbid `margin auto` in active nvue/component surfaces.
+
+---
+
+## [LRN-20260622-001] correction
+
+**Logged**: 2026-06-22T15:39:40Z
+**Priority**: high
+**Status**: pending
+**Area**: frontend
+
+### Summary
+水印旋转后 icon 错位不是单纯坐标公式问题，而是内容和编辑控件不在同一个旋转层。
+
+### Details
+用户真机截图显示水印内容旋转后，delete/rotate/resize 控件仍停在旋转前的横向位置。先前只调整外层坐标或 key 的做法不能解决，因为 `watermarkContent` 在 `watermarkTransformBox` 内旋转，而控制按钮作为兄弟节点仍按未旋转坐标定位。正确结构是让内容、边框和控制按钮共享同一个旋转容器；如果按钮图形要保持正向，再对按钮内部文本或图片做反向旋转。
+
+### Suggested Action
+以后修这类 nvue 视觉变换问题时，先检查 DOM 层级和 transform 坐标系，再写回归测试防止“内容变了、控件留在旧位置”的结构复发。真机验证必须以相机页旋转后的截图为准；HBuilderX CLI 卡住或只生成 dev 产物不能当作真机通过。
+
+### Metadata
+- Source: user_feedback
+- Related Files: pages/cameraX/index.nvue, test/structure.test.mjs, screenshots/
+- Tags: watermark, rotation, nvue, transform-layer, android-ui
+- Pattern-Key: uts_markvideo.watermark_controls_share_transform_layer
+- Recurrence-Count: 1
+- First-Seen: 2026-06-22
+- Last-Seen: 2026-06-22
+
+---
+
+## [LRN-20260622-C12] correction
+
+**Logged**: 2026-06-22T23:55:19+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+nvue 水印从小倍率再放大时，预览外层盒子必须跟着 pinch 的提交预览帧变大。
+
+### Details
+用户反馈水印从 1x 缩到 0.5x 后，再放大到 2x 时，外层会像 `overflow: hidden` 一样卡在旧的 1x/小倍率边界。根因是 `watermarkLayoutFrame()` 在 pinch 期间仍返回 `startFrame`，只靠内层 `scale()` 放大；`movable-view` 的 width/height 仍是旧尺寸，真机上会裁掉外扩部分。单独加 `overflow: visible` 不够可靠，因为 native 组件本身仍可能按旧布局盒裁剪。
+
+### Suggested Action
+后续修改 pinch 缩放时，用 `watermarkPinchPreviewFrame()` 合并 `startFrame` 和 `commitFrame` 给视觉层读取，但不要让 `watermarkMoveX/Y` 每帧读取预览帧反向驱动 `movable-view`。缩放期间移动根应保持稳定，视觉水印层在稳定根里定位和变大；仍然禁止在 pinch move 中调用 `updateWatermarkFrame()`、`scheduleWatermarkSync()`、`syncWatermarkToNative()` 或 `flushWatermarkSync()`。
+
+### Metadata
+- Source: user_feedback
+- Related Files: pages/cameraX/index.nvue, test/structure.test.mjs
+- Tags: watermark, nvue, pinch, movable-view, clipping
+- See Also: LRN-20260622-C10
+- Pattern-Key: uts_markvideo.watermark_pinch_preview_frame
+- Recurrence-Count: 1
+- First-Seen: 2026-06-22
+- Last-Seen: 2026-06-22
+
+### Resolution
+- **Resolved**: 2026-06-22T23:55:19+08:00
+- **Commit/PR**: pending
+- **Notes**: Added `watermarkPinchPreviewFrame()` and a regression test that fails when preview scale only transforms inside the old small layout box. This entry was later refined by LRN-20260623-C13 because driving `movable-view` x/y from the preview frame caused pinch flicker.
+
+---
+
+## [LRN-20260623-C13] correction
+
+**Logged**: 2026-06-23T00:36:52+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+nvue 水印 pinch 缩放不能每帧改 `movable-view` 的 `x/y/width/height`，否则会忽大忽小闪烁。
+
+### Details
+用户反馈捏合放大缩小时“一会儿大一会儿小、闪烁”。这是 C12 防裁剪方案的副作用：让 `watermarkMoveX/Y` 和外层盒子尺寸每帧读取 `commitFrame`，等于在双指手势中反向驱动 nvue 原生 `movable-view` 移动根，和组件自己的手势状态互相打架。正确折中是 pinch 期间把 `movable-view` 固定成整个水印编辑区域画布，`x/y` 固定为 `0`，只让内部 `watermarkTransformBox` 按预览帧定位和变大。
+
+### Suggested Action
+后续处理水印缩放时，保持三层分工：`movable-area` 是编辑范围；pinch 期间 `movable-view` 是稳定全区域画布；`watermarkTransformBox` 才读取 `watermarkPinchPreviewFrame()` 更新视觉位置、尺寸和旋转。不要恢复 `return this.watermarkMovePositionFromFrame(pinchFrame).x/y` 这类每帧驱动移动根的写法。
+
+### Metadata
+- Source: user_feedback
+- Related Files: pages/cameraX/index.nvue, test/structure.test.mjs
+- Tags: watermark, nvue, pinch, movable-view, flicker
+- See Also: LRN-20260622-C10, LRN-20260622-C12
+- Pattern-Key: uts_markvideo.watermark_pinch_stable_canvas_root
+- Recurrence-Count: 1
+- First-Seen: 2026-06-23
+- Last-Seen: 2026-06-23
+
+### Resolution
+- **Resolved**: 2026-06-23T00:36:52+08:00
+- **Commit/PR**: pending
+- **Notes**: `pages/cameraX/index.nvue` now fixes `watermarkMoveX/Y` to `0` during pinch, sizes the root to the edit area, and positions the visual transform box from the preview frame. Structure tests passed.
+
+---
+
+## [LRN-20260623-C14] correction
+
+**Logged**: 2026-06-23T10:53:47+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+相机页小型工具按钮应优先用常见简洁图标和外层热区触发，不要用复杂多线段图标并给子节点重复绑事件。
+
+### Details
+用户反馈闪光灯旁的切换摄像头 icon 太复杂，并且按钮未生效。更稳的做法是参考主流相机 UI 的切换符号，把事件只绑在外层 `cover-view` 热区，内部只显示一个简单 glyph，避免子节点事件、`click`/`touchend` 双触发和节流互相影响。
+
+### Suggested Action
+后续修改 `pages/cameraX/index.nvue` 的 native preview 覆盖控件时，操作按钮保持外层 tap area + 内部单一图标。若用户反馈点击不生效，先检查事件是否只绑定在外层热区；只有真机确认 `click` 不可靠时，再单独评估 `touchend` 兜底，避免默认双绑定。
+
+### Metadata
+- Source: user_feedback
+- Related Files: pages/cameraX/index.nvue, test/structure.test.mjs
+- Tags: cameraX, cover-view, icon, tap-area, nvue
+- Pattern-Key: uts_markvideo.camera_overlay_controls_outer_tap_area
+- Recurrence-Count: 1
+- First-Seen: 2026-06-23
+- Last-Seen: 2026-06-23
+
+### Resolution
+- **Resolved**: 2026-06-23T10:53:47+08:00
+- **Commit/PR**: pending
+- **Notes**: Replaced the multi-line switch-camera glyph with a single switch icon and kept one click handler on the outer tap area. Node tests passed.
+
+---
+
+## [LRN-20260623-C17] correction
+
+**Logged**: 2026-06-23T11:12:13+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+锁竖屏相机页不能用 `defaultDisplay.rotation` 或页面宽高判断拍照输出方向。
+
+### Details
+用户纠正：横着拍时，相册里应该仍然是横向图像；竖着拍时，相册里才应该是竖向图像。当前 `cameraX` 页面把宿主 Activity 锁成 portrait，所以 `windowManager.defaultDisplay.rotation` 不再等于用户物理拿手机的方向。预览显示方向仍可用 Camera1 的 `setDisplayOrientation()` 公式，但 JPEG `parameters.setRotation()` 和录像输出尺寸必须使用 `OrientationEventListener` 捕获的物理设备方向。
+
+### Suggested Action
+后续处理 Android Camera1 输出方向时，区分 preview display orientation 和 capture output rotation：预览用 display rotation；拍照/录像输出用 device orientation listener。不要在页面层用窗口宽高、portrait layout 或相册结果再做二次旋转。
+
+### Metadata
+- Source: user_feedback
+- Related Files: pages/cameraX/index.nvue, uni_modules/xyc-markvideo/utssdk/app-android/XycNativeCameraView.kt, test/structure.test.mjs
+- Tags: cameraX, android, camera1, orientation, photo-output, recording-output
+- See Also: LRN-20260623-C14
+- Pattern-Key: uts_markvideo.camera_output_uses_device_orientation
+- Recurrence-Count: 1
+- First-Seen: 2026-06-23
+- Last-Seen: 2026-06-23
+
+### Resolution
+- **Resolved**: 2026-06-23T11:12:13+08:00
+- **Commit/PR**: pending
+- **Notes**: Added `OrientationEventListener` for capture rotation while keeping preview display orientation separate. Structure tests guard against using display rotation for capture output.
+
+---
+
+## [LRN-20260623-C19] correction
+
+**Logged**: 2026-06-23T11:45:28+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+水印旋转后拖拽范围变窄时，`movable-view` 移动根和 clamp 必须使用同一套旋转外接框。
+
+### Details
+用户截图显示旋转后的水印横向拖拽只剩中间窄条。根因是 90 度宽水印旋转后，移动根仍按未旋转宽度参与计算，会把原生 `movable-view` 可移动范围压缩；进一步 commit 前审计发现，如果移动根改成旋转外接框，但 `clampWatermarkFrame()` 仍按不含手柄的内容外接框夹边，边缘会输出负 `x` 或超过原生最大 `x`，导致原生二次夹边和边缘跳动。
+
+### Suggested Action
+后续修改 `pages/cameraX/index.nvue` 的水印旋转/拖拽几何时，`watermarkBoxMetrics()`、`watermarkMovePositionFromFrame()`、`watermarkFrameFromMovePosition()` 和 `clampWatermarkFrame()` 必须共享 handle-inclusive rotated container bounds。测试要覆盖 90 度宽水印的可移动宽度，以及贴近四个边缘时输出给 `movable-view` 的 `x/y` 不越界。
+
+### Metadata
+- Source: user_feedback_and_subagent_audit
+- Related Files: pages/cameraX/index.nvue, test/structure.test.mjs
+- Tags: cameraX, nvue, watermark, rotation, movable-view, drag
+- See Also: LRN-20260623-C13, LRN-20260622-C10
+- Pattern-Key: uts_markvideo.rotated_watermark_drag_root_bounds
+- Recurrence-Count: 1
+- First-Seen: 2026-06-23
+- Last-Seen: 2026-06-23
+
+### Resolution
+- **Resolved**: 2026-06-23T11:45:28+08:00
+- **Commit/PR**: pending
+- **Notes**: `watermarkBoxMetrics()` now uses rotated external bounds for the root, and `clampWatermarkFrame()` clamps with the same `containerWidth/containerHeight`. Structure tests cover both movement range and native-bound edge output.
+
+---
+
+## [LRN-20260623-C20] best_practice
+
+**Logged**: 2026-06-23T13:34:28+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+纯图片水印模板的默认框必须由图片尺寸、模板 padding 和图文 gap 反推，不能只按 viewport 比例给框。
+
+### Details
+Android 真机截图显示纯图片水印 logo 顶部被浅灰背景框裁掉。根因是 `image-logo` 模板的图片为 `72x72`、`boxPadding=12`，但旧默认高度在紧凑相机视口下会落到 `64px`，小于 `72 + 12 * 2 = 96`；同时 nvue 预览曾经用静态 CSS `padding: 10px` 和 `.watermarkImage { margin-right: 8px }`，与 native payload 的 `boxPadding` / `imageTextGap` 不一致。修复时应让模板 frame 最小尺寸覆盖 `imageWidth + imageTextGap + textWidth + padding * 2`、`imageHeight + padding * 2`，纯图片无文字时 gap 必须为 0。
+
+### Suggested Action
+后续新增或调整水印模板时，先用模板内容尺寸计算预览 frame 和 native payload；不要只调 `boxWidth/boxHeight` 比例，也不要在 CSS 里保留与模板字段重复的静态 padding/margin。回归测试应覆盖紧凑视口下纯图片模板不会小于图片加 padding 的最小框。
+
+### Metadata
+- Source: user_feedback_and_subagent_audit
+- Related Files: pages/cameraX/index.nvue, test/structure.test.mjs
+- Tags: cameraX, nvue, watermark, image-template, clipping
+- See Also: LRN-20260623-C19, LRN-20260622-C12
+- Pattern-Key: uts_markvideo.image_watermark_frame_min_content_size
+- Recurrence-Count: 1
+- First-Seen: 2026-06-23
+- Last-Seen: 2026-06-23
+
+### Resolution
+- **Resolved**: 2026-06-23T13:34:28+08:00
+- **Commit/PR**: pending
+- **Notes**: Added template minimum frame sizing and dynamic nvue image padding/gap. `npm test` and `git diff --check` passed. Later true-device rerun confirmed the third-template to second-template path with `screenshots/adb-switchfix-third-to-second-final-20260623-1404.png`.
+
+---
+
+## [LRN-20260623-C21] best_practice
+
+**Logged**: 2026-06-23T14:05:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+水印模板切换必须先清掉旧 move/pinch/sync 状态并重建 nvue 移动根，再渲染新模板。
+
+### Details
+用户反馈从第三个图文模板切到第二个纯图片模板后，纯图片水印又出现残缺。根因不是纯图片模板本身的最小尺寸，而是切换路径可能让新 `activeWatermark` 先进入渲染，同时旧 `watermarkMoveDraft`、`watermarkPinchGesture` 或 nvue 原生 `movable-area` 子树仍保留第三模板的布局状态。正确顺序是：清 `watermarkSyncTimer`、pinch、move draft，按新模板计算并落下 `watermarkFrame` / `watermarkMovePosition`，递增稳定的 `watermarkRenderKey` 让 nvue 重建移动根，最后再替换 `activeWatermark`。
+
+### Suggested Action
+后续修改模板切换、恢复存储模板或重建水印 UI 时，不要先赋值 `activeWatermark` 再补 frame；需要重建图片/内容时，把 `:key="watermarkRenderKey"` 放在内部视觉内容层，不要放在原生 `movable-area` 根上。回归测试应同时覆盖源码顺序和状态序列：先选 `mixed-site`，再选 `image-logo`，第二次后的 frame/payload 高度必须至少为 `imageHeight + boxPadding * 2`。参见 LRN-20260623-C22。
+
+### Metadata
+- Source: user_feedback_and_subagent_audit
+- Related Files: pages/cameraX/index.nvue, test/structure.test.mjs
+- Tags: cameraX, nvue, watermark, template-switch, movable-view, clipping
+- See Also: LRN-20260623-C20, LRN-20260623-C13
+- Pattern-Key: uts_markvideo.watermark_template_switch_state_reset
+- Recurrence-Count: 1
+- First-Seen: 2026-06-23
+- Last-Seen: 2026-06-23
+
+### Resolution
+- **Resolved**: 2026-06-23T14:05:00+08:00
+- **Commit/PR**: pending
+- **Notes**: `applyWatermarkTemplate()` now clears old gesture/sync state, sets the new frame before `activeWatermark`, increments `watermarkRenderKey`, and true-device screenshot `screenshots/adb-switchfix-third-to-second-final-20260623-1404.png` confirms the third-to-second path no longer clips the logo.
+
+---
+
+## [LRN-20260623-C22] correction
+
+**Logged**: 2026-06-23T14:22:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: frontend
+
+### Summary
+水印模板切换不能用 `watermarkRenderKey` 重建原生 `movable-area` 根，否则位置会出现两阶段跳动。
+
+### Details
+用户反馈模板切换后水印会先出现在 `x1/y1`，约 0.5s 后跳到更低更右的 `x2/y2`，截图可能捕捉不明显。根因判断是上一轮为解决纯图片残缺把 `:key="watermarkRenderKey"` 放在 `<movable-area>` 上，导致 nvue 原生拖拽根被重建；随后绑定的 `watermarkMovePosition` 和晚到的 native `change` 事件会再次接管位置。同时 `handleWatermarkMoveChange()` 不应允许没有真实 `touchstart` 的 `source='touch'/'friction'` 等事件自行开启 move draft。
+
+### Suggested Action
+模板切换仍要先清 `watermarkSyncTimer`、pinch、move draft，并先计算新 `watermarkFrame` / `watermarkMovePosition` 再替换 `activeWatermark`；但 `watermarkRenderKey` 应下移到 `watermarkTransformBox`。`handleWatermarkMoveChange()` 只在 `watermarkMoveActive` 已由 `startWatermarkMove()` 开启时接受坐标，并在模板切换短窗口内关闭视觉 transition。
+
+### Metadata
+- Source: user_feedback
+- Related Files: pages/cameraX/index.nvue, test/structure.test.mjs
+- Tags: cameraX, nvue, watermark, template-switch, movable-view, position-jump
+- See Also: LRN-20260623-C21
+- Pattern-Key: uts_markvideo.watermark_template_switch_single_position_source
+- Recurrence-Count: 1
+- First-Seen: 2026-06-23
+- Last-Seen: 2026-06-23
+
+---
+
+## [LRN-20260623-C23] correction
+
+**Logged**: 2026-06-23T15:12:32+08:00
+**Priority**: high
+**Status**: pending
+**Area**: frontend
+
+### Summary
+`logo3.png` 本身是正向素材，不能继续沿用 `logo2.png` 的上下翻转补偿。
+
+### Details
+用户反馈换成 `logo3` 后水印上下颠倒。根因是此前为 `logo2.png` 方向问题在 nvue 预览层 `watermarkImageStyle()` 加了 `scaleY(-1)`，并在 Android `drawWatermarkOnPhoto()` 绘制图片前局部 `canvas.scale(1f, -1f, center)`；换成正向 `logo3.png` 后，这两个补偿会把图片再次翻转。
+
+### Suggested Action
+水印图片方向修复必须绑定当前素材验证：换 logo 时同步检查 nvue 预览、Android 照片烧录、录像 overlay 是否还需要翻转。默认保持源图方向绘制；只有当前素材和运行输出明确相反时才加局部补偿，并用测试禁止遗留旧补偿。
+
+### Metadata
+- Source: user_feedback
+- Related Files: static/watermark/logo3.png, pages/cameraX/index.nvue, uni_modules/xyc-markvideo/utssdk/app-android/XycNativeCameraView.kt, test/structure.test.mjs
+- Tags: cameraX, watermark, image-orientation, logo3, android, nvue
+- See Also: LRN-20260623-C14
+- Pattern-Key: uts_markvideo.watermark_logo_asset_specific_orientation
+- Recurrence-Count: 1
+- First-Seen: 2026-06-23
+- Last-Seen: 2026-06-23
+
+---
+
+## [LRN-20260623-C18] correction
+
+**Logged**: 2026-06-23T11:26:37+08:00
+**Priority**: high
+**Status**: pending
+**Area**: frontend
+
+### Summary
+前摄成片左右镜像不能只靠 preview orientation 和 capture rotation 修复。
+
+### Details
+用户反馈前置摄像头成片仍然左右颠倒。当前 Camera1 链路已经把预览显示方向和 capture rotation 分开，且初次修复加入了前摄源图/源帧水平反镜像；但如果保存时只相信 `requestedCameraFacing`，运行态相机 id 与请求状态不同步时仍可能漏掉前摄分支。正确处理顺序是：先从实际 `activeCameraId` 冻结前后摄状态，再纠正相机源图/源帧镜像，最后绘制水印；不能最后整体 flip 成片，否则水印文字也会左右颠倒。
+
+### Suggested Action
+后续处理前摄输出时，冻结当次拍摄或录像的实际 `activeCameraFacing()`，在保存路径里让前摄照片经过 `applyFrontCameraOutputMirror()`，让录像 PixelCopy 帧经过 `applyFrontCameraFrameMirrorIfNeeded()`，并让水印绘制发生在反镜像后的源图/源帧上。无水印前摄照片也要经过同样路径，不能只修有水印分支。
+
+### Metadata
+- Source: user_feedback
+- Related Files: uni_modules/xyc-markvideo/utssdk/app-android/XycNativeCameraView.kt, test/structure.test.mjs
+- Tags: cameraX, android, camera1, front-camera, mirror, media-output
+- See Also: LRN-20260623-C17
+- Pattern-Key: uts_markvideo.front_camera_media_unmirror_before_watermark
+- Recurrence-Count: 1
+- First-Seen: 2026-06-23
+- Last-Seen: 2026-06-23
+
+### Resolution
+- **Resolved**: 2026-06-23T11:26:37+08:00
+- **Commit/PR**: pending
+- **Notes**: Front-camera photo writing and recording frames now apply horizontal source unmirror before watermark drawing, and structure tests cover the no-watermark photo branch too.
 
 ---

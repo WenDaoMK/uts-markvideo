@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION")
+
 package uts.xyc.markvideo.android
 
 import android.Manifest
@@ -6,6 +8,7 @@ import android.app.Activity
 import android.content.ContentValues
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -21,6 +24,7 @@ import android.hardware.Camera
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.ExifInterface
+import android.media.MediaMetadataRetriever
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
@@ -37,6 +41,7 @@ import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.util.Log
 import android.view.Gravity
+import android.view.OrientationEventListener
 import android.view.PixelCopy
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -61,6 +66,15 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     private val ioHandler = Handler(ioThread.looper)
     private val previewView = SurfaceView(context)
     private val statusView = TextView(context)
+    private var deviceOrientationDegrees = 0
+    private val captureOrientationListener = object : OrientationEventListener(context.applicationContext) {
+        override fun onOrientationChanged(orientation: Int) {
+            if (orientation == OrientationEventListener.ORIENTATION_UNKNOWN) {
+                return
+            }
+            deviceOrientationDegrees = roundDeviceOrientationDegrees(orientation)
+        }
+    }
     private var eventCallback: ((String, String) -> Unit)? = null
 
     private var camera: Camera? = null
@@ -70,6 +84,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     private var currentMode = "photo"
     private var requestedFlashMode = UI_FLASH_OFF
     private var requestedZoomMode = UI_ZOOM_1X
+    private var requestedCameraFacing = UI_CAMERA_BACK
     private var targetFps = DEFAULT_TARGET_FPS
     private var previewSize = XycSize(1280, 720)
     private var pictureSize = XycSize(1920, 1080)
@@ -80,6 +95,9 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     private var photoBusy = false
     private var recordingStartedAt = 0L
     private var videoOutputTarget: VideoOutputTarget? = null
+    private var lastPublishedMediaUri = ""
+    private var lastPublishedMediaKind = ""
+    private var lastPublishedAlbumUri = ""
     private var cameraPermissionRequested = false
     private var cameraPermissionRetryCount = 0
     private var recordPermissionRequested = false
@@ -90,6 +108,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     private var recordingWatermarkBitmap: Bitmap? = null
     private var recordingWatermarkOverlay: WatermarkOverlay? = null
     private var recordingVideoBurnIn = false
+    private var recordingCameraFacing = UI_CAMERA_BACK
     @Volatile private var recordingFrameError = false
     @Volatile private var recordingFrameErrorStage = ""
     @Volatile private var recordingFrameErrorDetail = ""
@@ -98,6 +117,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     private var videoFrameLoopRunning = false
     private val videoFramePending = AtomicBoolean(false)
     private var reusableVideoFrame: Bitmap? = null
+    private var reusableMirroredVideoFrame: Bitmap? = null
     @Volatile private var releaseReusableFrameAfterRecordStop = false
     @Volatile private var quitIoThreadAfterRecordStop = false
     private val videoFrameRunnable = object : Runnable {
@@ -108,6 +128,9 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
 
     init {
         lockHostActivityToPortrait()
+        if (captureOrientationListener.canDetectOrientation()) {
+            captureOrientationListener.enable()
+        }
         setBackgroundColor(Color.BLACK)
         previewView.holder.addCallback(this)
         addView(
@@ -132,6 +155,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     }
 
     override fun onDetachedFromWindow() {
+        captureOrientationListener.disable()
         closeCamera(true)
         if (recordingStopRequested) {
             quitIoThreadAfterRecordStop = true
@@ -209,6 +233,61 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
                 .put("applied", applied)
                 .put("message", if (applied) zoomModeMessage(requestedZoomMode) else unsupportedZoomModeMessage(normalizedMode))
             emit("zoomchange", data)
+            ok(data)
+        }
+    }
+
+    fun switchCamera(): String {
+        return runOnMainSync {
+            if (recording || recordingStopRequested || photoBusy) {
+                return@runOnMainSync failAndEmit("1105", "拍摄或保存中不能切换摄像头", "switchCamera while busy")
+            }
+            if (!holderReady) {
+                return@runOnMainSync failAndEmit("1104", "相机未就绪", "Preview surface is not ready.")
+            }
+            if (!hasPermission(Manifest.permission.CAMERA)) {
+                requestCameraPermissionIfNeeded(REQUEST_CAMERA_PERMISSION)
+                setStatus("请授权相机权限后重试")
+                return@runOnMainSync failAndEmit("1001", "相机权限未授权", "CAMERA permission is not granted.")
+            }
+
+            val previousFacing = requestedCameraFacing
+            val previousZoomMode = requestedZoomMode
+            val previousFlashMode = requestedFlashMode
+            val nextFacing = nextCameraFacing(previousFacing)
+            val targetCameraId = resolveCameraIdForFacing(nextFacing)
+            if (targetCameraId < 0) {
+                val data = cameraSwitchPayload(nextFacing, false, unsupportedCameraFacingMessage(nextFacing))
+                emit("camerachange", data)
+                return@runOnMainSync ok(data)
+            }
+
+            requestedCameraFacing = nextFacing
+            requestedZoomMode = UI_ZOOM_1X
+            if (requestedCameraFacing == UI_CAMERA_FRONT) {
+                requestedFlashMode = UI_FLASH_OFF
+            }
+
+            closeCamera()
+            val applied = try {
+                openCameraIfReady()
+                camera != null && activeCameraId == targetCameraId
+            } catch (_: Throwable) {
+                false
+            }
+            if (!applied) {
+                closeCamera()
+                requestedCameraFacing = previousFacing
+                requestedZoomMode = previousZoomMode
+                requestedFlashMode = previousFlashMode
+                if (holderReady && hasPermission(Manifest.permission.CAMERA)) {
+                    openCameraIfReady()
+                }
+            }
+
+            val message = if (applied) cameraFacingMessage(requestedCameraFacing) else "摄像头切换失败"
+            val data = cameraSwitchPayload(nextFacing, applied, message)
+            emit("camerachange", data)
             ok(data)
         }
     }
@@ -351,6 +430,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
                 val file = File(context.cacheDir, "xyc-markvideo-photo-${System.currentTimeMillis()}.jpg")
                 val frozenWatermark = activeWatermark
                 val frozenWatermarkBitmap = copyWatermarkBitmap(activeWatermarkBitmap)
+                val frozenCameraFacing = activeCameraFacing()
                 try {
                     callbackCamera.startPreview()
                 } catch (_: Throwable) {
@@ -358,7 +438,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
                 ioHandler.post {
                     try {
                         val writeStartedAt = System.currentTimeMillis()
-                        val photoResult = writePhotoWithWatermark(file, data, frozenWatermark, frozenWatermarkBitmap)
+                        val photoResult = writePhotoWithWatermark(file, data, frozenWatermark, frozenWatermarkBitmap, frozenCameraFacing)
                         val watermarkWriteMs = System.currentTimeMillis() - writeStartedAt
                         val dataPayload = mediaPayload(
                             tempFilePath = file.absolutePath,
@@ -373,7 +453,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
                             val albumStartedAt = System.currentTimeMillis()
                             val albumResult = saveMediaToAlbum(file, "image/jpeg", false)
                             albumSaveMs = System.currentTimeMillis() - albumStartedAt
-                            appendAlbumSuccess(dataPayload, albumResult, "照片已保存到相册")
+                            appendAlbumSuccess(dataPayload, albumResult, "照片已保存到相册", "photo")
                         } catch (throwable: Throwable) {
                             albumSaveMs = System.currentTimeMillis() - writeStartedAt - watermarkWriteMs
                             albumError = throwable.message ?: throwable.javaClass.simpleName
@@ -486,6 +566,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
                 recordingWatermarkBitmap = frozenWatermarkBitmap
                 recordingWatermarkOverlay = frozenWatermarkOverlay
                 recordingVideoBurnIn = frozenWatermark != null
+                recordingCameraFacing = activeCameraFacing()
                 recordingFrameError = false
                 startVideoFrameLoop()
                 setStatus("录像中")
@@ -539,6 +620,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             val frozenWatermarkBitmap = recordingWatermarkBitmap
             val frozenWatermarkOverlay = recordingWatermarkOverlay
             val requestedVideoBurnIn = recordingVideoBurnIn
+            val frozenCameraFacing = recordingCameraFacing
             val data = mediaPayload(
                 tempFilePath = outputTarget.resultPath(),
                 durationMs = durationMs,
@@ -566,11 +648,31 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
                     frozenWatermark = frozenWatermark,
                     frozenWatermarkBitmap = frozenWatermarkBitmap,
                     frozenWatermarkOverlay = frozenWatermarkOverlay,
-                    requestedVideoBurnIn = requestedVideoBurnIn
+                    requestedVideoBurnIn = requestedVideoBurnIn,
+                    cameraFacing = frozenCameraFacing
                 )
             }
             setStatus("视频保存中")
             ok(pendingData)
+        }
+    }
+
+    fun openSystemAlbum(mediaUri: String): String {
+        return runOnMainSync {
+            val targetUri = albumOpenUri(mediaUri)
+            val intent = Intent(Intent.ACTION_VIEW, targetUri)
+                .setDataAndType(targetUri, albumOpenMimeType(mediaUri))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            try {
+                context.startActivity(intent)
+                ok(payload()
+                    .put("message", "已打开系统相册")
+                    .put("albumUri", targetUri.toString())
+                    .put("mediaKind", if (lastPublishedMediaKind.isBlank()) "album" else lastPublishedMediaKind))
+            } catch (throwable: Throwable) {
+                failAndEmit("1601", "打开系统相册失败", throwable.message ?: throwable.javaClass.simpleName)
+            }
         }
     }
 
@@ -628,9 +730,13 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         }
 
         return try {
-            activeCameraId = resolveCameraIdForZoomMode(requestedZoomMode)
+            val targetCameraId = resolveCameraIdForZoomMode(requestedZoomMode)
+            if (targetCameraId < 0) {
+                return failAndEmit("1106", unsupportedCameraFacingMessage(requestedCameraFacing), "No camera for facing=$requestedCameraFacing")
+            }
+            activeCameraId = targetCameraId
             val activeCamera = Camera.open(activeCameraId)
-            activeCamera.setDisplayOrientation(resolveCameraRotationDegrees(activeCameraId))
+            activeCamera.setDisplayOrientation(resolveCameraDisplayOrientationDegrees(activeCameraId))
             applyCameraParameters(activeCamera)
             activeCamera.setPreviewDisplay(previewView.holder)
             activeCamera.startPreview()
@@ -649,10 +755,10 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
 
     private fun applyCameraParameters(activeCamera: Camera) {
         val parameters = activeCamera.parameters
-        val selectedPreviewSize = chooseCameraSize(parameters.supportedPreviewSizes)
-        previewSize = XycSize(selectedPreviewSize.width, selectedPreviewSize.height)
         pictureSize = choosePhotoSize(parameters.supportedPictureSizes)
-        videoSize = chooseVideoSize(parameters)
+        val selectedPreviewSize = chooseCameraSize(parameters.supportedPreviewSizes, pictureSize)
+        previewSize = XycSize(selectedPreviewSize.width, selectedPreviewSize.height)
+        videoSize = chooseVideoSize(parameters, pictureSize)
 
         parameters.setPreviewSize(previewSize.width, previewSize.height)
         parameters.setPictureSize(pictureSize.width, pictureSize.height)
@@ -681,6 +787,9 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         val activeCamera = camera ?: return requestedZoomMode == UI_ZOOM_1X
         return try {
             val targetCameraId = resolveCameraIdForZoomMode(requestedZoomMode)
+            if (targetCameraId < 0) {
+                return false
+            }
             if (targetCameraId != activeCameraId) {
                 if (recording || photoBusy) {
                     if (failIfUnsupported) {
@@ -709,7 +818,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
 
     private fun applyZoomModeToParameters(parameters: Camera.Parameters, failIfUnsupported: Boolean): Boolean {
         if (requestedZoomMode == UI_ZOOM_WIDE) {
-            if (resolveWideBackCameraId() >= 0) {
+            if (requestedCameraFacing == UI_CAMERA_BACK && resolveWideBackCameraId() >= 0) {
                 return applyDigitalZoom(parameters, 100, failIfUnsupported)
             }
             if (failIfUnsupported) {
@@ -851,6 +960,10 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         }
     }
 
+    private fun nextCameraFacing(currentFacing: String): String {
+        return if (currentFacing == UI_CAMERA_FRONT) UI_CAMERA_BACK else UI_CAMERA_FRONT
+    }
+
     private fun flashModeMessage(mode: String): String {
         return when (mode) {
             UI_FLASH_ON -> "闪光灯：开"
@@ -867,6 +980,10 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         }
     }
 
+    private fun cameraFacingMessage(facing: String): String {
+        return if (facing == UI_CAMERA_FRONT) "前置摄像头" else "后置摄像头"
+    }
+
     private fun unsupportedFlashModeMessage(mode: String): String {
         return when (mode) {
             UI_FLASH_ON -> "当前设备不支持闪光灯常亮"
@@ -881,6 +998,22 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             UI_ZOOM_2X -> "当前设备不支持 2x 焦段"
             else -> "焦段：1x"
         }
+    }
+
+    private fun unsupportedCameraFacingMessage(facing: String): String {
+        return if (facing == UI_CAMERA_FRONT) "当前设备不支持前置摄像头" else "当前设备不支持后置摄像头"
+    }
+
+    private fun cameraSwitchPayload(requestedFacing: String, applied: Boolean, message: String): org.json.JSONObject {
+        return payload()
+            .put("message", message)
+            .put("cameraFacing", activeCameraFacing())
+            .put("requestedCameraFacing", requestedFacing)
+            .put("flashMode", requestedFlashMode)
+            .put("zoomMode", requestedZoomMode)
+            .put("availableCameraFacings", cameraFacingsPayload())
+            .put("availableZoomModes", zoomModesPayload(camera?.parameters))
+            .put("applied", applied)
     }
 
     private fun validateRecordingFlashMode(activeCamera: Camera): String? {
@@ -914,7 +1047,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
 
     private fun applyCaptureOrientation(activeCamera: Camera) {
         val parameters = activeCamera.parameters
-        parameters.setRotation(resolveCameraRotationDegrees(activeCameraId))
+        parameters.setRotation(resolveCameraCaptureRotationDegrees(activeCameraId))
         activeCamera.parameters = parameters
     }
 
@@ -925,15 +1058,35 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         }
     }
 
-    private fun resolveCameraRotationDegrees(cameraId: Int): Int {
+    private fun resolveCameraDisplayOrientationDegrees(cameraId: Int): Int {
         val info = Camera.CameraInfo()
         Camera.getCameraInfo(cameraId, info)
         val displayRotationDegrees = currentDisplayRotationDegrees()
         return if (info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
-            (info.orientation - displayRotationDegrees + 360) % 360
+            val mirroredResult = (info.orientation + displayRotationDegrees) % 360
+            (360 - mirroredResult) % 360
         } else {
-            (info.orientation + displayRotationDegrees) % 360
+            (info.orientation - displayRotationDegrees + 360) % 360
         }
+    }
+
+    private fun resolveCameraCaptureRotationDegrees(cameraId: Int): Int {
+        val info = Camera.CameraInfo()
+        Camera.getCameraInfo(cameraId, info)
+        val captureOrientationDegrees = currentCaptureOrientationDegrees()
+        return if (info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
+            (info.orientation - captureOrientationDegrees + 360) % 360
+        } else {
+            (info.orientation + captureOrientationDegrees) % 360
+        }
+    }
+
+    private fun currentCaptureOrientationDegrees(): Int {
+        return deviceOrientationDegrees
+    }
+
+    private fun roundDeviceOrientationDegrees(orientation: Int): Int {
+        return (((orientation + 45) / 90) * 90) % 360
     }
 
     private fun currentDisplayRotationDegrees(): Int {
@@ -978,6 +1131,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         val frameWatermark = recordingWatermarkSnapshot
         val frameWatermarkBitmap = recordingWatermarkBitmap
         val frameWatermarkOverlay = recordingWatermarkOverlay
+        val frameCameraFacing = recordingCameraFacing
         val targetBitmap = reusableVideoFrame?.takeIf {
             !it.isRecycled && it.width == recorder.width && it.height == recorder.height
         } ?: Bitmap.createBitmap(recorder.width, recorder.height, Bitmap.Config.ARGB_8888).also {
@@ -1002,6 +1156,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
                     ioHandler.post {
                         try {
                             var watermarkReady = true
+                            applyFrontCameraFrameMirrorIfNeeded(targetBitmap, frameCameraFacing)
                             if (frameWatermarkOverlay != null) {
                                 try {
                                     drawWatermarkOverlay(targetBitmap, frameWatermarkOverlay)
@@ -1092,6 +1247,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         frozenWatermarkBitmap: Bitmap?,
         frozenWatermarkOverlay: WatermarkOverlay?,
         requestedVideoBurnIn: Boolean,
+        cameraFacing: String,
         frameWaitStartedAt: Long = System.currentTimeMillis()
     ) {
         try {
@@ -1107,6 +1263,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
                             frozenWatermarkBitmap = frozenWatermarkBitmap,
                             frozenWatermarkOverlay = frozenWatermarkOverlay,
                             requestedVideoBurnIn = requestedVideoBurnIn,
+                            cameraFacing = cameraFacing,
                             frameWaitStartedAt = frameWaitStartedAt
                         )
                     }, FRAME_IDLE_POLL_MS)
@@ -1115,7 +1272,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
                 videoFramePending.set(false)
             }
             if (recorder.videoSampleCount <= 0) {
-                ensureVideoFrameBeforeFinish(recorder, frozenWatermark, frozenWatermarkBitmap, frozenWatermarkOverlay)
+                ensureVideoFrameBeforeFinish(recorder, frozenWatermark, frozenWatermarkBitmap, frozenWatermarkOverlay, cameraFacing)
             }
 
             val hadFrameError = recordingFrameError
@@ -1181,7 +1338,11 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
                         val albumStartedAt = System.currentTimeMillis()
                         val albumResult = publishVideoOutput(outputTarget)
                         albumSaveMs = System.currentTimeMillis() - albumStartedAt
-                        appendAlbumSuccess(data, albumResult, "视频已保存到相册")
+                        appendAlbumSuccess(data, albumResult, "视频已保存到相册", "video")
+                        val thumbnailPath = createVideoThumbnail(outputTarget)
+                        if (thumbnailPath.isNotBlank()) {
+                            data.put("thumbnailPath", thumbnailPath)
+                        }
                     } catch (throwable: Throwable) {
                         albumSaveMs = System.currentTimeMillis() - stopRequestedAt - finishMs
                         albumError = "stage=${RECORD_STAGE_PUBLISH_ALBUM}; error=${errorSummary(throwable)}"
@@ -1237,7 +1398,8 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         recorder: CameraMp4Recorder,
         frozenWatermark: NativeWatermark?,
         frozenWatermarkBitmap: Bitmap?,
-        frozenWatermarkOverlay: WatermarkOverlay?
+        frozenWatermarkOverlay: WatermarkOverlay?,
+        cameraFacing: String
     ): Boolean {
         if (recorder.videoSampleCount > 0) {
             return true
@@ -1274,6 +1436,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             return false
         }
         var watermarkReady = true
+        applyFrontCameraFrameMirrorIfNeeded(targetBitmap, cameraFacing)
         if (frozenWatermarkOverlay != null) {
             try {
                 drawWatermarkOverlay(targetBitmap, frozenWatermarkOverlay)
@@ -1343,6 +1506,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         recycleWatermarkOverlay(recordingWatermarkOverlay)
         recordingWatermarkOverlay = null
         recordingVideoBurnIn = false
+        recordingCameraFacing = UI_CAMERA_BACK
         if (recordingStopRequested) {
             releaseReusableFrameAfterRecordStop = true
         } else {
@@ -1396,6 +1560,8 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     private fun recycleReusableVideoFrame() {
         reusableVideoFrame?.recycle()
         reusableVideoFrame = null
+        recycleBitmap(reusableMirroredVideoFrame)
+        reusableMirroredVideoFrame = null
     }
 
     private fun markRecordingFrameError(stage: String, throwable: Throwable) {
@@ -1465,21 +1631,53 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     }
 
     private fun findBackCameraId(): Int {
-        return findPrimaryBackCameraId()
+        return findCameraIdByFacing(Camera.CameraInfo.CAMERA_FACING_BACK)
     }
 
-    private fun findPrimaryBackCameraId(): Int {
+    private fun findFrontCameraId(): Int {
+        return findCameraIdByFacing(Camera.CameraInfo.CAMERA_FACING_FRONT)
+    }
+
+    private fun findCameraIdByFacing(facing: Int): Int {
         val info = Camera.CameraInfo()
         for (cameraIndex in 0 until Camera.getNumberOfCameras()) {
             Camera.getCameraInfo(cameraIndex, info)
-            if (info.facing == Camera.CameraInfo.CAMERA_FACING_BACK) {
+            if (info.facing == facing) {
                 return cameraIndex
             }
         }
-        return 0
+        return -1
+    }
+
+    private fun findPrimaryBackCameraId(): Int {
+        val backCameraId = findBackCameraId()
+        if (backCameraId >= 0) {
+            return backCameraId
+        }
+        return if (Camera.getNumberOfCameras() > 0) 0 else -1
+    }
+
+    private fun resolveCameraIdForFacing(facing: String): Int {
+        return if (facing == UI_CAMERA_FRONT) findFrontCameraId() else findPrimaryBackCameraId()
+    }
+
+    private fun activeCameraFacing(): String {
+        if (activeCameraId < 0) {
+            return requestedCameraFacing
+        }
+        return try {
+            val info = Camera.CameraInfo()
+            Camera.getCameraInfo(activeCameraId, info)
+            if (info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) UI_CAMERA_FRONT else UI_CAMERA_BACK
+        } catch (_: Throwable) {
+            requestedCameraFacing
+        }
     }
 
     private fun resolveCameraIdForZoomMode(zoomMode: String): Int {
+        if (requestedCameraFacing == UI_CAMERA_FRONT) {
+            return findFrontCameraId()
+        }
         if (zoomMode == UI_ZOOM_WIDE) {
             val wideCameraId = resolveWideBackCameraId()
             if (wideCameraId >= 0) {
@@ -1493,27 +1691,33 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         return -1
     }
 
-    private fun chooseCameraSize(sizes: List<Camera.Size>?): Camera.Size {
+    private fun chooseCameraSize(sizes: List<Camera.Size>?, targetSize: XycSize? = null): Camera.Size {
         val available = sizes ?: emptyList()
+        val targetAspect = targetSize?.let { aspectRatioForMatch(it.width, it.height) }
         return available
-            .filter { sizeFitsQualityCap(it.width, it.height) }
-            .maxByOrNull { it.width * it.height }
-            ?: available.maxByOrNull { it.width * it.height }
+            .minWithOrNull(
+                compareBy<Camera.Size> { aspectDelta(it.width, it.height, targetAspect) }
+                    .thenByDescending { sizeFitsQualityCap(it.width, it.height) }
+                    .thenByDescending { it.width * it.height }
+            )
             ?: error("No camera size is available.")
     }
 
-    private fun chooseVideoSize(parameters: Camera.Parameters): XycSize {
+    private fun chooseVideoSize(parameters: Camera.Parameters, targetSize: XycSize): XycSize {
         val videoSizes = parameters.supportedVideoSizes ?: parameters.supportedPreviewSizes
-        val selected = chooseCameraSize(videoSizes)
+        val selected = chooseCameraSize(videoSizes, targetSize)
         return XycSize(selected.width, selected.height)
     }
 
     private fun choosePhotoSize(sizes: List<Camera.Size>?): XycSize {
         val available = sizes ?: emptyList()
+        val targetAspect = targetCameraFrameAspect()
         val selected = available
-            .filter { max(it.width, it.height) <= MAX_PHOTO_SIZE_LONG_EDGE && it.width * it.height <= MAX_PHOTO_SIZE_PIXELS }
-            .maxByOrNull { it.width * it.height }
-            ?: available.minByOrNull { it.width * it.height }
+            .minWithOrNull(
+                compareBy<Camera.Size> { aspectDelta(it.width, it.height, targetAspect) }
+                    .thenByDescending { photoSizeFitsQualityCap(it.width, it.height) }
+                    .thenByDescending { it.width * it.height }
+            )
             ?: return previewSize
         return XycSize(selected.width, selected.height)
     }
@@ -1531,12 +1735,33 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     }
 
     private fun shouldRotateRecordingOutput(): Boolean {
-        val rotationDegrees = activeCameraId.takeIf { it >= 0 }?.let { resolveCameraRotationDegrees(it) } ?: 0
+        val rotationDegrees = activeCameraId.takeIf { it >= 0 }?.let { resolveCameraCaptureRotationDegrees(it) } ?: 0
         return rotationDegrees == 90 || rotationDegrees == 270
     }
 
     private fun sizeFitsQualityCap(width: Int, height: Int): Boolean {
         return max(width, height) <= MAX_CAMERA_SIZE_LONG_EDGE && width * height <= MAX_CAMERA_SIZE_PIXELS
+    }
+
+    private fun photoSizeFitsQualityCap(width: Int, height: Int): Boolean {
+        return max(width, height) <= MAX_PHOTO_SIZE_LONG_EDGE && width * height <= MAX_PHOTO_SIZE_PIXELS
+    }
+
+    private fun aspectRatioForMatch(width: Int, height: Int): Float {
+        val longEdge = max(1, max(width, height))
+        val shortEdge = max(1, min(width, height))
+        return shortEdge.toFloat() / longEdge.toFloat()
+    }
+
+    private fun aspectDelta(width: Int, height: Int, targetAspect: Float?): Float {
+        if (targetAspect == null) {
+            return 0f
+        }
+        return abs(aspectRatioForMatch(width, height) - targetAspect)
+    }
+
+    private fun targetCameraFrameAspect(): Float {
+        return CAMERA_FRAME_ASPECT_SHORT_EDGE / CAMERA_FRAME_ASPECT_LONG_EDGE
     }
 
     private fun chooseVideoBitrate(size: XycSize, fps: Int): Int {
@@ -1743,9 +1968,11 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         file: File,
         data: ByteArray,
         watermark: NativeWatermark?,
-        watermarkBitmap: Bitmap?
+        watermarkBitmap: Bitmap?,
+        cameraFacing: String
     ): PhotoWriteResult {
-        if (watermark == null) {
+        val needsFrontCameraUnmirror = cameraFacing == UI_CAMERA_FRONT
+        if (watermark == null && !needsFrontCameraUnmirror) {
             file.writeBytes(data)
             val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
             val size = PhotoWriteResult(
@@ -1767,14 +1994,21 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         if (orientedBitmap != sourceBitmap) {
             sourceBitmap.recycle()
         }
-        val outputBitmap = ensureMutableBitmap(orientedBitmap)
-        if (outputBitmap != orientedBitmap) {
+        val cameraAlignedBitmap = applyFrontCameraOutputMirror(orientedBitmap, cameraFacing)
+        if (cameraAlignedBitmap != orientedBitmap) {
             orientedBitmap.recycle()
         }
-        val burnedIn = drawWatermarkOnPhoto(Canvas(outputBitmap), outputBitmap.width, outputBitmap.height, watermark, watermarkBitmap)
-        if (!burnedIn) {
-            outputBitmap.recycle()
-            throw IllegalStateException("水印内容不可绘制")
+        val outputBitmap = ensureMutableBitmap(cameraAlignedBitmap)
+        if (outputBitmap != cameraAlignedBitmap) {
+            cameraAlignedBitmap.recycle()
+        }
+        var burnedIn = false
+        if (watermark != null) {
+            burnedIn = drawWatermarkOnPhoto(Canvas(outputBitmap), outputBitmap.width, outputBitmap.height, watermark, watermarkBitmap)
+            if (!burnedIn) {
+                outputBitmap.recycle()
+                throw IllegalStateException("水印内容不可绘制")
+            }
         }
         FileOutputStream(file).use { output ->
             outputBitmap.compress(Bitmap.CompressFormat.JPEG, PHOTO_JPEG_QUALITY, output)
@@ -1785,6 +2019,34 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             size = resultSize,
             watermarkBurnedIn = burnedIn
         )
+    }
+
+    private fun applyFrontCameraOutputMirror(source: Bitmap, cameraFacing: String): Bitmap {
+        if (cameraFacing != UI_CAMERA_FRONT) {
+            return source
+        }
+        return Bitmap.createBitmap(source, 0, 0, source.width, source.height, frontCameraMirrorMatrix(source.width), true)
+    }
+
+    private fun applyFrontCameraFrameMirrorIfNeeded(target: Bitmap, cameraFacing: String) {
+        if (cameraFacing != UI_CAMERA_FRONT) {
+            return
+        }
+        val mirrorFrame = reusableMirroredVideoFrame?.takeIf {
+            !it.isRecycled && it.width == target.width && it.height == target.height
+        } ?: Bitmap.createBitmap(target.width, target.height, Bitmap.Config.ARGB_8888).also {
+            recycleBitmap(reusableMirroredVideoFrame)
+            reusableMirroredVideoFrame = it
+        }
+        Canvas(mirrorFrame).drawBitmap(target, frontCameraMirrorMatrix(target.width), null)
+        Canvas(target).drawBitmap(mirrorFrame, 0f, 0f, null)
+    }
+
+    private fun frontCameraMirrorMatrix(width: Int): Matrix {
+        val matrix = Matrix()
+        matrix.postScale(-1f, 1f)
+        matrix.postTranslate(width.toFloat(), 0f)
+        return matrix
     }
 
     private fun drawWatermarkOnPhoto(
@@ -1813,6 +2075,9 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         var contentLeft = rect.left + padding
         val contentTop = rect.top + padding
         val contentBottom = rect.bottom - padding
+        val hasTitle = watermark.mainTitleText.isNotBlank()
+        val hasSubtitle = watermark.subtitleText.isNotBlank()
+        val contentRight = rect.right - padding
         val imageBitmap = cachedImageBitmap ?: decodeWatermarkBitmap(watermark.imagePath, true)
         val shouldRecycleImageBitmap = cachedImageBitmap == null && imageBitmap != null
         var drewContent = false
@@ -1823,15 +2088,17 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
 
         if (imageBitmap != null && imageWidth > 0f && imageHeight > 0f) {
             val imageTop = contentTop + max(0f, (contentBottom - contentTop - imageHeight) / 2f)
-            val imageRect = RectF(contentLeft, imageTop, contentLeft + imageWidth, imageTop + imageHeight)
+            val imageLeft = if (!hasTitle && !hasSubtitle) {
+                contentLeft + max(0f, (contentRight - contentLeft - imageWidth) / 2f)
+            } else {
+                contentLeft
+            }
+            val imageRect = RectF(imageLeft, imageTop, imageLeft + imageWidth, imageTop + imageHeight)
             val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 isFilterBitmap = true
                 isDither = true
             }
-            canvas.save()
-            canvas.scale(1f, -1f, imageRect.centerX(), imageRect.centerY())
             canvas.drawBitmap(imageBitmap, null, imageRect, imagePaint)
-            canvas.restore()
             contentLeft += imageWidth + gap
             drewContent = true
             if (shouldRecycleImageBitmap) {
@@ -1840,8 +2107,6 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         }
 
         val textMaxWidth = rect.right - padding - contentLeft
-        val hasTitle = watermark.mainTitleText.isNotBlank()
-        val hasSubtitle = watermark.subtitleText.isNotBlank()
         if (textMaxWidth > 0f && (hasTitle || hasSubtitle)) {
             val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG)
             titlePaint.color = parseWatermarkColor(watermark.mainTitleColor, Color.WHITE, 1f)
@@ -2102,6 +2367,8 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             .put("mode", currentMode)
             .put("flashMode", requestedFlashMode)
             .put("zoomMode", requestedZoomMode)
+            .put("cameraFacing", activeCameraFacing())
+            .put("availableCameraFacings", cameraFacingsPayload())
             .put("availableZoomModes", zoomModesPayload(camera?.parameters))
             .put("fps", targetFps)
             .put("previewWidth", previewSize.width)
@@ -2115,7 +2382,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
     private fun zoomModesPayload(parameters: Camera.Parameters?): org.json.JSONArray {
         val modes = org.json.JSONArray()
         modes.put(UI_ZOOM_1X)
-        if (resolveWideBackCameraId() >= 0) {
+        if (requestedCameraFacing == UI_CAMERA_BACK && resolveWideBackCameraId() >= 0) {
             modes.put(UI_ZOOM_WIDE)
         }
         if (parameters != null && parameters.isZoomSupported) {
@@ -2128,6 +2395,17 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         return modes
     }
 
+    private fun cameraFacingsPayload(): org.json.JSONArray {
+        val facings = org.json.JSONArray()
+        if (findBackCameraId() >= 0) {
+            facings.put(UI_CAMERA_BACK)
+        }
+        if (findFrontCameraId() >= 0) {
+            facings.put(UI_CAMERA_FRONT)
+        }
+        return facings
+    }
+
     private fun mediaPayload(tempFilePath: String, durationMs: Long, width: Int, height: Int): org.json.JSONObject {
         return payload()
             .put("tempFilePath", tempFilePath)
@@ -2135,6 +2413,37 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             .put("durationMs", durationMs)
             .put("width", width)
             .put("height", height)
+    }
+
+    private fun albumOpenUri(mediaUri: String): Uri {
+        val preferredUri = mediaUri.takeIf { it.isNotBlank() } ?: lastPublishedAlbumUri
+        if (preferredUri.isNotBlank()) {
+            if (preferredUri.startsWith("content://") || preferredUri.startsWith("file://")) {
+                return Uri.parse(preferredUri)
+            } else {
+                return mediaCollectionUri()
+            }
+        }
+        return mediaCollectionUri()
+    }
+
+    private fun mediaCollectionUri(): Uri {
+        return if (lastPublishedMediaKind == "video") {
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        } else {
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        }
+    }
+
+    private fun albumOpenMimeType(mediaUri: String): String {
+        val target = mediaUri.takeIf { it.isNotBlank() } ?: lastPublishedMediaUri
+        if (lastPublishedMediaKind == "video" || target.endsWith(".mp4", ignoreCase = true)) {
+            return "video/*"
+        }
+        if (lastPublishedMediaKind == "photo" || target.endsWith(".jpg", ignoreCase = true) || target.endsWith(".jpeg", ignoreCase = true)) {
+            return "image/*"
+        }
+        return "*/*"
     }
 
     private fun appendWatermarkResult(
@@ -2194,11 +2503,14 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             .put("rotation", watermark.rotation)
     }
 
-    private fun appendAlbumSuccess(data: org.json.JSONObject, albumResult: AlbumSaveResult, message: String): org.json.JSONObject {
+    private fun appendAlbumSuccess(data: org.json.JSONObject, albumResult: AlbumSaveResult, message: String, kind: String): org.json.JSONObject {
+        rememberPublishedMedia(albumResult, kind)
         return data
             .put("savedToAlbum", true)
             .put("albumPath", albumResult.albumPath)
             .put("albumUri", albumResult.albumUri)
+            .put("mediaKind", kind)
+            .put("thumbnailPath", albumResult.thumbnailPath)
             .put("message", message)
     }
 
@@ -2207,7 +2519,15 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             .put("savedToAlbum", false)
             .put("albumPath", "")
             .put("albumUri", "")
+            .put("mediaKind", "")
+            .put("thumbnailPath", "")
             .put("message", message)
+    }
+
+    private fun rememberPublishedMedia(albumResult: AlbumSaveResult, kind: String) {
+        lastPublishedMediaUri = albumResult.albumUri
+        lastPublishedMediaKind = kind
+        lastPublishedAlbumUri = if (albumResult.albumUri.isNotBlank()) albumResult.albumUri else albumResult.albumPath
     }
 
     private fun appendRecordTiming(
@@ -2339,6 +2659,37 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         }
         MediaScannerConnection.scanFile(context, arrayOf(targetFile.absolutePath), arrayOf(mimeType), null)
         return AlbumSaveResult(targetFile.absolutePath, targetFile.absolutePath)
+    }
+
+    private fun createVideoThumbnail(target: VideoOutputTarget): String {
+        return try {
+            val retriever = MediaMetadataRetriever()
+            try {
+                target.uri?.let { uri ->
+                    retriever.setDataSource(context, uri)
+                } ?: target.file?.let { file ->
+                    retriever.setDataSource(file.absolutePath)
+                } ?: return ""
+                val frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: return ""
+                try {
+                    val thumbnailFile = File(context.cacheDir, "xyc-markvideo-thumb-${System.currentTimeMillis()}.jpg")
+                    FileOutputStream(thumbnailFile).use { output ->
+                        frame.compress(Bitmap.CompressFormat.JPEG, 82, output)
+                    }
+                    thumbnailFile.absolutePath
+                } finally {
+                    frame.recycle()
+                }
+            } finally {
+                try {
+                    retriever.release()
+                } catch (_: Throwable) {
+                }
+            }
+        } catch (throwable: Throwable) {
+            Log.w(LOG_TAG, "Failed to create video thumbnail.", throwable)
+            ""
+        }
     }
 
     private fun shouldShowCenterStatus(text: String): Boolean {
@@ -3169,6 +3520,8 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         const val MAX_CAMERA_SIZE_PIXELS = 2_073_600
         const val MAX_PHOTO_SIZE_LONG_EDGE = 3000
         const val MAX_PHOTO_SIZE_PIXELS = 6_000_000
+        const val CAMERA_FRAME_ASPECT_SHORT_EDGE = 3f
+        const val CAMERA_FRAME_ASPECT_LONG_EDGE = 4f
         const val PHOTO_JPEG_QUALITY = 90
         const val MAX_RECORDING_LONG_EDGE = 1440
         const val MAX_RECORDING_PIXELS = 1_166_400
@@ -3226,6 +3579,8 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         const val UI_ZOOM_WIDE = "wide"
         const val UI_ZOOM_1X = "1x"
         const val UI_ZOOM_2X = "2x"
+        const val UI_CAMERA_BACK = "back"
+        const val UI_CAMERA_FRONT = "front"
         const val REQUEST_CAMERA_PERMISSION = 7201
         const val REQUEST_PREPARE_PHOTO_PERMISSIONS = 7203
         const val REQUEST_PREPARE_PERMISSIONS = 7204
@@ -3237,5 +3592,5 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         const val LOG_TAG = "XycMarkVideo"
     }
 
-    private data class AlbumSaveResult(val albumPath: String, val albumUri: String)
+    private data class AlbumSaveResult(val albumPath: String, val albumUri: String, val thumbnailPath: String = "")
 }

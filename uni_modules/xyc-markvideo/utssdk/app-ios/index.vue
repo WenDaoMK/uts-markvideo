@@ -10,7 +10,7 @@
 
   export default {
     name: "xyc-markvideo",
-    emits: ['nativeviewready', 'shuttertap', 'modechange', 'tooltap'],
+    emits: ['nativeviewready', 'shuttertap', 'modechange', 'tooltap', 'camerachange'],
     props: {
       mode: {
         type: String,
@@ -21,7 +21,7 @@
         default: "XYC native camera preview"
       }
     },
-    expose: ['setStatus', 'switchMode', 'takePhoto', 'startRecord', 'stopRecord'],
+    expose: ['setStatus', 'switchMode', 'switchCamera', 'takePhoto', 'startRecord', 'stopRecord'],
     methods: {
       setStatus(text : string) {
         if (this.$el != null) {
@@ -32,6 +32,11 @@
       switchMode(mode : string) {
         this.$emit('modechange', { mode: mode })
         return createPendingResult("模式已切换，原生相机能力待接入")
+      },
+      switchCamera() {
+        const result = createPendingResult("摄像头切换能力待接入")
+        this.$emit('camerachange', result)
+        return result
       },
       takePhoto() {
         const result = createPendingResult("拍照能力待接入")

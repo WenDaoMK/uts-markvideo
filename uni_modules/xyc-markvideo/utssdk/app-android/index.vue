@@ -16,7 +16,8 @@
       'recordstart',
       'recorddone',
       'flashchange',
-      'zoomchange'
+      'zoomchange',
+      'camerachange'
     ],
     props: {
       mode: {
@@ -64,7 +65,7 @@
         immediate: false
       }
     },
-    expose: ['setStatus', 'switchMode', 'setFlashMode', 'setZoomMode', 'setWatermark', 'clearWatermark', 'takePhoto', 'startRecord', 'stopRecord', 'restartCamera', 'preparePermissions', 'prepareRecordPermissions', 'destroyCamera'],
+    expose: ['setStatus', 'switchMode', 'setFlashMode', 'setZoomMode', 'switchCamera', 'setWatermark', 'clearWatermark', 'takePhoto', 'startRecord', 'stopRecord', 'openSystemAlbum', 'restartCamera', 'preparePermissions', 'prepareRecordPermissions', 'destroyCamera'],
     methods: {
       emitNativeEvent(eventName : string, payload : any) {
         if (eventName == 'cameraready') {
@@ -93,6 +94,10 @@
         }
         if (eventName == 'zoomchange') {
           this.$emit('zoomchange', payload);
+          return;
+        }
+        if (eventName == 'camerachange') {
+          this.$emit('camerachange', payload);
         }
       },
       resolveCameraView() : XycNativeCameraView | null {
@@ -140,6 +145,13 @@
         }
         return view.setZoomMode(mode);
       },
+      switchCamera() : string {
+        const view = this.requireCameraView();
+        if (view == null) {
+          return nativeViewUnavailable();
+        }
+        return view.switchCamera();
+      },
       setWatermark(template : any) : string {
         const view = this.requireCameraView();
         if (view == null) {
@@ -174,6 +186,13 @@
           return nativeViewUnavailable();
         }
         return view.stopRecord();
+      },
+      openSystemAlbum(mediaUri : string = '') : string {
+        const view = this.requireCameraView();
+        if (view == null) {
+          return nativeViewUnavailable();
+        }
+        return view.openSystemAlbum(mediaUri);
       },
       restartCamera() : string {
         const view = this.requireCameraView();
