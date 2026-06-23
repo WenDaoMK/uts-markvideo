@@ -454,7 +454,8 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
                     width = recordingSize.width,
                     height = recordingSize.height,
                     fps = targetFps,
-                    bitrate = chooseVideoBitrate(recordingSize, targetFps)
+                    bitrate = chooseVideoBitrate(recordingSize, targetFps),
+                    includeAudio = RECORD_AUDIO_ENABLED
                 )
                 recorder.start()
                 videoRecorder = recorder
@@ -544,24 +545,32 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
                     stopError = throwable.message ?: throwable.javaClass.simpleName
                 }
                 if (stopError != null) {
+                    Log.e(
+                        LOG_TAG,
+                        "record stop failed during finish: error=${stopError}; frames=${recorder.frameCount}; videoSamples=${recorder.videoSampleCount}; hadFrameError=${hadFrameError}; finishMs=${finishMs}"
+                    )
                     outputTarget.discard(context)
                     recycleBitmap(frozenWatermarkBitmap)
                     runOnMain {
-                        failAndEmit("1402", "录像停止失败", stopError ?: "finish failed")
+                        failAndEmit("1402", "录像停止失败", "finish=${stopError ?: "finish failed"}; frames=${recorder.frameCount}; videoSamples=${recorder.videoSampleCount}; hadFrameError=${hadFrameError}")
                     }
                 } else {
                     val invalidVideoReason = when {
-                        recorder.frameCount <= 0 -> "录像没有写入有效视频帧"
+                        recorder.videoSampleCount <= 0 -> "录像没有写入有效视频帧"
                         else -> null
                     }
                     if (invalidVideoReason != null) {
+                        Log.e(
+                            LOG_TAG,
+                            "record stop failed validation: reason=${invalidVideoReason}; frames=${recorder.frameCount}; videoSamples=${recorder.videoSampleCount}; hadFrameError=${hadFrameError}; finishMs=${finishMs}"
+                        )
                         outputTarget.discard(context)
                         recycleBitmap(frozenWatermarkBitmap)
                         runOnMain {
-                            failAndEmit("1402", "录像停止失败", invalidVideoReason)
+                            failAndEmit("1402", invalidVideoReason, "frames=${recorder.frameCount}; videoSamples=${recorder.videoSampleCount}; hadFrameError=${hadFrameError}; finishMs=${finishMs}")
                         }
                     } else {
-                        val finalVideoBurnIn = requestedVideoBurnIn && !hadFrameError && recorder.frameCount > 0
+                        val finalVideoBurnIn = requestedVideoBurnIn && !hadFrameError && recorder.videoSampleCount > 0
                         data.put("watermarkVideoBurnIn", finalVideoBurnIn)
                         try {
                             val albumStartedAt = System.currentTimeMillis()
@@ -1794,6 +1803,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             .put("recordAlbumSaveMs", max(0L, albumSaveMs))
             .put("recordTotalSaveMs", max(0L, totalSaveMs))
             .put("recordFrameCount", recorder.frameCount)
+            .put("recordVideoSampleCount", recorder.videoSampleCount)
             .put("recordFileBytes", max(0L, fileBytes))
             .put("recordHadFrameError", hadFrameError)
     }
@@ -2167,6 +2177,8 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         private val reusableYuv = ByteArray(frameSize + quarterFrameSize * 2)
         var frameCount: Int = 0
             private set
+        var videoSampleCount: Int = 0
+            private set
 
         fun start() {
             muxer = if (outputFileDescriptor != null) {
@@ -2356,7 +2368,9 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
                         if (bufferInfo.size != 0) {
                             encodedData.position(bufferInfo.offset)
                             encodedData.limit(bufferInfo.offset + bufferInfo.size)
-                            writeMuxerSample(activeMuxer, videoTrackIndex, encodedData, bufferInfo)
+                            if (writeMuxerSample(activeMuxer, videoTrackIndex, encodedData, bufferInfo)) {
+                                videoSampleCount += 1
+                            }
                         }
                         activeEncoder.releaseOutputBuffer(outputIndex, false)
                         if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
@@ -2482,10 +2496,11 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
             trackIndex: Int,
             encodedData: java.nio.ByteBuffer,
             bufferInfo: MediaCodec.BufferInfo
-        ) {
+        ): Boolean {
             synchronized(muxerLock) {
-                if (!muxerStarted || trackIndex < 0) return
+                if (!muxerStarted || trackIndex < 0) return false
                 activeMuxer.writeSampleData(trackIndex, encodedData, bufferInfo)
+                return true
             }
         }
 
@@ -2647,6 +2662,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), SurfaceHolde
         const val MIN_VIDEO_BITRATE = 4_000_000
         const val MAX_VIDEO_BITRATE = 10_000_000
         const val VIDEO_BITRATE_PIXEL_DIVISOR = 4
+        const val RECORD_AUDIO_ENABLED = false
         const val MIME_TYPE = "video/avc"
         const val AUDIO_SAMPLE_RATE = 44_100
         const val AUDIO_CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
