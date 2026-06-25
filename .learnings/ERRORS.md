@@ -215,6 +215,7 @@ ModuleNotFoundError: No module named 'PIL'
 - Operation: 运行临时截图模板比对脚本，判断水印 logo 是否与 normal/vflip 版本匹配。
 - Environment: 默认 `python3`，不是 Codex workspace bundled Python。
 - Impact: 额外花了一轮才切到 bundled Python 执行图像分析。
+- Recurrence: 2026-06-25 再次用默认 `python3` 量化 CameraX 顶栏截图时复现同样 `ModuleNotFoundError`，切到 Codex bundled Python 后脚本成功。
 
 ### Suggested Fix
 图像分析或脚本验证优先使用 `load_workspace_dependencies` 提供的 bundled Python 路径，或先检查 Pillow 是否可用。
@@ -1010,5 +1011,73 @@ When this shell lacks npm, run the repository test script directly with the Code
 - **Resolved**: 2026-06-25T22:37:49+08:00
 - **Commit/PR**: pending
 - **Notes**: Verified the equivalent `node --test test/*.test.mjs` command with the bundled Node runtime.
+
+---
+
+## [ERR-20260626-001] missing_trellis_context_script
+
+**Logged**: 2026-06-26T00:42:19+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: config
+
+### Summary
+The repo root does not contain the `.trellis/scripts/get_context.py` helper expected by the `start` workflow, so session bootstrap has to fall back to the repository's own instructions.
+
+### Error
+```text
+python3: can't open file '/Users/chaixixi/od/uts-markvideo/.trellis/scripts/get_context.py': [Errno 2] No such file or directory
+```
+
+### Context
+- Operation: session-start context load
+- Command attempted: `python3 /Users/chaixixi/od/uts-markvideo/.trellis/scripts/get_context.py`
+- Result: the helper script is absent from this checkout
+
+### Suggested Fix
+Use `AGENTS.md`, `README.md`, and direct git inspection when this repository has no `.trellis/` bootstrap script.
+
+### Metadata
+- Reproducible: yes
+- Related Files: AGENTS.md, README.md
+
+### Resolution
+- **Resolved**: 2026-06-26T00:42:19+08:00
+- **Commit/PR**: pending
+- **Notes**: Switched to the repository's actual instructions and continued with direct inspection.
+
+---
+
+## [ERR-20260626-002] shell_missing_node_runtime
+
+**Logged**: 2026-06-26T00:42:19+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The shell `PATH` does not expose `node`, so the repo test suite cannot run with the default shell runtime.
+
+### Error
+```text
+zsh:1: command not found: node
+```
+
+### Context
+- Operation: pre-commit verification
+- Command attempted: `node --test test/*.test.mjs`
+- Result: command failed before the suite started
+
+### Suggested Fix
+Use the bundled Codex Node executable from `load_workspace_dependencies` for repo verification.
+
+### Metadata
+- Reproducible: yes
+- Related Files: package.json
+
+### Resolution
+- **Resolved**: 2026-06-26T00:42:19+08:00
+- **Commit/PR**: pending
+- **Notes**: Switched to `/Users/chaixixi/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node` for verification.
 
 ---

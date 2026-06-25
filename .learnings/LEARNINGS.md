@@ -66,7 +66,63 @@ CameraX 顶部胶囊偏上时，优先调顶栏内部绝对定位点，不要先
 ### Resolution
 - **Resolved**: 2026-06-25T15:00:00+08:00
 - **Commit/PR**: pending
-- **Notes**: Moved `.topSide`, `.topTitleBox`, and `.topRightSide` from `top: 23px` to `top: 32px` and updated structure-test assertions accordingly.
+- **Notes**: Moved `.topSide`, `.topTitleBox`, and `.topRightSide` from `top: 23px` to `top: 36px` and updated structure-test assertions accordingly after the device compare showed the capsules still sat too high at 32px.
+
+---
+
+## [LRN-20260626-001] knowledge_gap
+
+**Logged**: 2026-06-26T00:42:19+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: config
+
+### Summary
+This checkout does not include `.trellis/scripts/get_context.py`; repository startup here should use `AGENTS.md`, `README.md`, and direct git inspection instead of the Trellis helper.
+
+### Details
+I initially tried to load the `start` workflow context from the repo root, but the helper script is absent in this checkout. The real repository root is `/Users/chaixixi/od/uts-markvideo`, and the repo-specific guidance lives in `AGENTS.md` and `README.md`.
+
+### Suggested Action
+When entering this repo, do not assume `.trellis` is present. Load the local instructions and inspect git state directly.
+
+### Metadata
+- Source: conversation
+- Related Files: AGENTS.md, README.md
+- Tags: setup, repo-root, context-loading
+
+### Resolution
+- **Resolved**: 2026-06-26T00:42:19+08:00
+- **Commit/PR**: pending
+- **Notes**: Switched to the repository's actual instructions and continued with direct inspection.
+
+---
+
+## [LRN-20260626-002] best_practice
+
+**Logged**: 2026-06-26T00:42:19+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+This shell does not expose `node` on `PATH`; repo verification should use the bundled Codex Node executable instead.
+
+### Details
+Running `node --test test/*.test.mjs` failed with `command not found`. `load_workspace_dependencies` exposes a stable bundled Node path at `/Users/chaixixi/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node`, which can run the same test suite without relying on shell PATH.
+
+### Suggested Action
+When the shell runtime is sparse, call the bundled Node executable directly for test runs.
+
+### Metadata
+- Source: conversation
+- Related Files: package.json
+- Tags: node, tests, runtime, verification
+
+### Resolution
+- **Resolved**: 2026-06-26T00:42:19+08:00
+- **Commit/PR**: pending
+- **Notes**: Re-ran verification with the bundled Node runtime.
 
 ---
 ## [LRN-20260625-C03] correction

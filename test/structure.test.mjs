@@ -1086,7 +1086,7 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.doesNotMatch(page, /plus\.android|watermarkTraceAndroidLog/);
   assert.match(page, /setMode\(mode(?:: string)?\)(?:: void)? \{[\s\S]*this\.triggerHaptic\('light'\)[\s\S]*this\.mode = mode/);
   assert.match(page, /if \(this\.mode === 'photo'\) \{[\s\S]*this\.triggerHaptic\('light'\)[\s\S]*nativeCamera\.takePhoto\(\)/);
-  assert.match(page, /if \(!this\.isRecording\) \{[\s\S]*this\.triggerHaptic\('medium'\)[\s\S]*prepareRecordPermissions\(\)[\s\S]*this\.recordStartPending = true[\s\S]*nativeCamera\.startRecord\(\{ fps: this\.targetFps \}\)/);
+  assert.match(pressShutterBody, /if \(!this\.isRecording\) \{[\s\S]*this\.triggerHaptic\('medium'\)[\s\S]*if \(!await this\.prepareRecordPermissions\(\)\)/);
   assert.match(page, /scheduleRecordPermissionRetry\(\) \{[\s\S]*this\.checkRecordPermissions\(\)[\s\S]*this\.scheduleRecordPermissionRetry\(\)/);
   assert.match(page, /this\.triggerHaptic\('medium'\)[\s\S]*this\.isRecording = false[\s\S]*nativeCamera\.stopRecord\(\)/);
   assert.match(page, /normalizeNativeCommandReturn\(result(?:: any \| null)?, fallbackMessage(?:: string)?, acceptedMessage(?:: string)?, watchedErrorCodes(?:: Array<string>)?\)/);
@@ -1096,6 +1096,7 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.doesNotMatch(pressShutterBody, /nativeCamera\.startRecord\(\{ fps: this\.targetFps \}\)/);
   assert.notEqual(startRecordReadyBody, '', 'startRecordWithReadyPermissions body should be inspectable');
   assert.match(startRecordReadyBody, /if \(this\.activeWatermark != null && !await this\.flushWatermarkSync\(true\)\)/);
+  assert.match(startRecordReadyBody, /this\.recordStartPending = true[\s\S]*this\.startRecordPendingTimeout\(\)[\s\S]*nativeCamera\.startRecord\(\{ fps: this\.targetFps \}\)/);
   assert.match(startRecordReadyBody, /nativeCamera\.startRecord\(\{ fps: this\.targetFps \}\)/);
   assert.doesNotMatch(startRecordReadyBody, /prepareRecordPermissions\(/);
   assert.match(page, /normalizeNativeCommandReturn\(await nativeCamera\.setWatermark\(payload\), '水印设置失败', '水印已更新', \['12', '14'\]\)/);
@@ -1443,10 +1444,10 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.doesNotMatch(page, /cameraDebugBorder/);
   assert.match(page, /\.zoomButtonSelected \{[\s\S]*background-color: #ff8a00;[\s\S]*border-color: #ff8a00;/);
   assert.match(page, /\.zoomTextSelected \{[\s\S]*color: #ffffff;/);
-  assert.match(page, /\.topTitleBox \{[\s\S]*position: absolute;[\s\S]*left: 0;[\s\S]*right: 0;[\s\S]*top: 36px;[\s\S]*height: 42px;[\s\S]*justify-content: center;/);
+  assert.match(page, /\.topTitleBox \{[\s\S]*position: absolute;[\s\S]*left: 0;[\s\S]*right: 0;[\s\S]*top: 38px;[\s\S]*height: 42px;[\s\S]*justify-content: center;/);
   assert.match(page, /\.topBar \{[\s\S]*height: 88px;/);
-  assert.match(page, /\.topSide \{[\s\S]*position: absolute;[\s\S]*left: 14px;[\s\S]*top: 36px;/);
-  assert.match(page, /\.topRightSide \{[\s\S]*position: absolute;[\s\S]*right: 14px;[\s\S]*top: 36px;/);
+  assert.match(page, /\.topSide \{[\s\S]*position: absolute;[\s\S]*left: 14px;[\s\S]*top: 38px;/);
+  assert.match(page, /\.topRightSide \{[\s\S]*position: absolute;[\s\S]*right: 14px;[\s\S]*top: 38px;/);
   assert.match(page, /color: #ffffff/);
   assert.match(page, /border-color: rgba\(255, 59, 48, 0\.72\)/);
   assert.match(page, /\.shutterWrap \{[\s\S]*left: 0;[\s\S]*right: 0;[\s\S]*justify-content: center;/);

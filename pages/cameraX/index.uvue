@@ -3887,7 +3887,7 @@ function roundWatermarkPx(value: number): number {
 .topSide {
   position: absolute;
   left: 14px;
-  top: 36px;
+  top: 38px;
   width: 64px;
   height: 42px;
   align-items: center;
@@ -3920,7 +3920,7 @@ function roundWatermarkPx(value: number): number {
   position: absolute;
   left: 0;
   right: 0;
-  top: 36px;
+  top: 38px;
   height: 42px;
   align-items: center;
   justify-content: center;
@@ -3949,7 +3949,7 @@ function roundWatermarkPx(value: number): number {
 .topRightSide {
   position: absolute;
   right: 14px;
-  top: 36px;
+  top: 38px;
   width: 136px;
   height: 42px;
   flex-direction: row;
