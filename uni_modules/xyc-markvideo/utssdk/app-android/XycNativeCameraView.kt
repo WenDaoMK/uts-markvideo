@@ -3007,24 +3007,31 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), TextureView.
 
     private fun requestCameraPermissionIfNeeded(requestCode: Int) {
         if (cameraPermissionRequested) return
-        cameraPermissionRequested = true
-        cameraPermissionRetryCount = 0
-        requestPermissions(arrayOf(Manifest.permission.CAMERA), requestCode)
-        scheduleCameraPermissionRetry()
+        if (requestPermissions(arrayOf(Manifest.permission.CAMERA), requestCode)) {
+            cameraPermissionRequested = true
+            cameraPermissionRetryCount = 0
+            scheduleCameraPermissionRetry()
+        }
     }
 
     private fun requestRecordPermissionsIfNeeded(missingPermissions: ArrayList<String>) {
         if (recordPermissionRequested) return
-        recordPermissionRequested = true
-        recordPermissionRetryCount = 0
-        requestPermissions(missingPermissions.toTypedArray(), REQUEST_PREPARE_RECORD_PERMISSIONS)
-        scheduleRecordPermissionRetry()
+        if (requestPermissions(missingPermissions.toTypedArray(), REQUEST_PREPARE_RECORD_PERMISSIONS)) {
+            recordPermissionRequested = true
+            recordPermissionRetryCount = 0
+            scheduleRecordPermissionRetry()
+        }
     }
 
-    private fun requestPermissions(permissions: Array<String>, requestCode: Int) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || permissions.isEmpty()) return
-        val activity = findActivity(context) ?: return
-        activity.requestPermissions(permissions, requestCode)
+    private fun requestPermissions(permissions: Array<String>, requestCode: Int): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || permissions.isEmpty()) return false
+        val activity = findActivity(context) ?: return false
+        return try {
+            activity.requestPermissions(permissions, requestCode)
+            true
+        } catch (throwable: Throwable) {
+            false
+        }
     }
 
     private fun scheduleCameraPermissionRetry() {

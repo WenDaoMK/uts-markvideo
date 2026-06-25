@@ -1343,9 +1343,6 @@ export default {
         }
       }
       this.syncWatermarkToNative(false)
-      setTimeout(() => {
-        this.prepareRecordPermissions(true)
-      }, 180)
     },
     handleNativeError(event: UTSJSONObject | null) {
       const detail = this.eventDetail(event)

@@ -668,6 +668,9 @@ test('uvue runtime value boundaries avoid Android ClassCastException regressions
   assert.match(eventDetailBody, /return payload != null \? payload : \{\}/);
   assert.doesNotMatch(eventDetailBody, /event as UTSJSONObject|nativeEvent\['detail'\]/);
   assert.match(cameraPage, /handleCameraReady\(event: UTSJSONObject \| null\)/);
+  const handleCameraReadyBody = cameraPage.match(/async handleCameraReady\(event: UTSJSONObject \| null\) \{[\s\S]*?\n    \},\n    handleNativeError/)?.[0] || '';
+  assert.notEqual(handleCameraReadyBody, '', 'handleCameraReady body should be inspectable');
+  assert.doesNotMatch(handleCameraReadyBody, /prepareRecordPermissions/);
   assert.match(cameraPage, /handleNativeError\(event: UTSJSONObject \| null\)/);
   assert.match(cameraPage, /handlePhotoDone\(event: UTSJSONObject \| null\)/);
   assert.match(cameraPage, /handleRecordStart\(event: UTSJSONObject \| null\)/);
@@ -2343,6 +2346,9 @@ test('xyc-markvideo Android native view uses camera preview, photo, and 30fps re
   assert.match(nativeView, /setPreviewFpsRange/);
   assert.match(nativeView, /onWindowFocusChanged/);
   assert.match(nativeView, /recordPermissionRequested && recordMissingPermissions\(\)\.isEmpty\(\)/);
+  assert.match(nativeView, /if \(requestPermissions\(missingPermissions\.toTypedArray\(\), REQUEST_PREPARE_RECORD_PERMISSIONS\)\) \{[\s\S]*recordPermissionRequested = true[\s\S]*scheduleRecordPermissionRetry\(\)/);
+  assert.match(nativeView, /private fun requestPermissions\(permissions: Array<String>, requestCode: Int\): Boolean/);
+  assert.match(nativeView, /val activity = findActivity\(context\) \?: return false/);
   assert.match(nativeView, /scheduleCameraPermissionRetry/);
   assert.match(nativeView, /cameraPermissionRequested/);
   assert.match(nativeView, /recordPermissionRequested/);
