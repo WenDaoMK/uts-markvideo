@@ -2428,6 +2428,8 @@ test('xyc-markvideo Android native view uses camera preview, photo, and 30fps re
   assert.match(nativeView, /lastVideoPresentationTimeUs = -1L/);
   assert.match(nativeView, /private var videoPresentationOffsetUs = -1L/);
   assert.match(nativeView, /private var audioPresentationOffsetUs = -1L/);
+  assert.match(nativeView, /private var lastAudioPresentationTimeUs = -1L/);
+  assert.match(nativeView, /lastAudioPresentationTimeUs = -1L/);
   assert.match(nativeView, /audioThread\?\.join\(max\(1L, deadlineMs - System\.currentTimeMillis\(\)\)\)/);
   assert.match(nativeView, /if \(audioThread\?\.isAlive == true\) \{[\s\S]*throw stageFailure\(RECORD_STAGE_AUDIO_THREAD_JOIN, IllegalStateException\("Timed out waiting for audio encoder thread\."\)\)/);
   assert.match(nativeView, /recordingFramesCanWriteAt = recordingStartedAt \+ RECORD_START_WARMUP_MS/);
@@ -2441,11 +2443,13 @@ test('xyc-markvideo Android native view uses camera preview, photo, and 30fps re
   assert.match(nativeView, /if \(writeMuxerSample\(activeMuxer, audioTrackIndex, encodedData, bufferInfo, isAudio = true, RECORD_STAGE_MUXER_WRITE_AUDIO_SAMPLE\)\) \{[\s\S]*audioSampleCount \+= 1/);
   assert.match(nativeView, /private fun updateAudioPeak\(inputBuffer: java\.nio\.ByteBuffer, bytesRead: Int\) \{/);
   assert.match(nativeView, /private fun nextVideoPresentationTimeUs\(\): Long \{[\s\S]*val nowNs = System\.nanoTime\(\)[\s\S]*if \(videoStartedAtNs == 0L\) \{[\s\S]*videoStartedAtNs = nowNs[\s\S]*val elapsedUs = max\(0L, \(nowNs - videoStartedAtNs\) \/ 1000L\)[\s\S]*max\(lastVideoPresentationTimeUs \+ 1L, elapsedUs\)/);
-  assert.match(nativeView, /private fun writeMuxerSample\([\s\S]*isAudio: Boolean,[\s\S]*stage: String[\s\S]*\): Boolean \{[\s\S]*if \(!muxerStarted \|\| trackIndex < 0\) return false[\s\S]*val originalPresentationTimeUs = bufferInfo\.presentationTimeUs[\s\S]*videoPresentationOffsetUs = originalPresentationTimeUs[\s\S]*bufferInfo\.presentationTimeUs = max\(0L, originalPresentationTimeUs - videoPresentationOffsetUs\)[\s\S]*activeMuxer\.writeSampleData\(trackIndex, encodedData, bufferInfo\)[\s\S]*bufferInfo\.presentationTimeUs = originalPresentationTimeUs[\s\S]*return true/);
+  assert.match(nativeView, /private fun writeMuxerSample\([\s\S]*if \(isAudio\) \{[\s\S]*audioPresentationOffsetUs = originalPresentationTimeUs[\s\S]*val adjustedPresentationTimeUs = max\(0L, originalPresentationTimeUs - audioPresentationOffsetUs\)[\s\S]*val safePresentationTimeUs = if \(lastAudioPresentationTimeUs < 0L\) \{[\s\S]*adjustedPresentationTimeUs[\s\S]*\} else \{[\s\S]*max\(lastAudioPresentationTimeUs \+ 1L, adjustedPresentationTimeUs\)[\s\S]*\}[\s\S]*bufferInfo\.presentationTimeUs = safePresentationTimeUs/);
+  assert.match(nativeView, /if \(isAudio\) \{[\s\S]*activeMuxer\.writeSampleData\(trackIndex, encodedData, bufferInfo\)[\s\S]*lastAudioPresentationTimeUs = bufferInfo\.presentationTimeUs/);
   assert.match(nativeView, /private fun applyVideoBitrateMode\(format: MediaFormat, codecInfo: MediaCodecInfo\) \{[\s\S]*BITRATE_MODE_CBR/);
   assert.match(nativeView, /recordAudioDiscardedReadCount/);
   assert.match(nativeView, /recordStartWarmupMs/);
   assert.match(nativeView, /RECORD_STAGE_AUDIO_THREAD_JOIN = "audio_thread_join"/);
+  assert.match(nativeView, /record stop audio pts last=\$\{lastAudioPresentationTimeUs\}; offset=\$\{audioPresentationOffsetUs\}; samples=\$\{audioSampleCount\}/);
   assert.match(nativeView, /Log\.i\([\s\S]*LOG_TAG[\s\S]*record stop timing/);
   assert.match(nativeView, /var stopFailure: Throwable\? = null/);
   assert.match(nativeView, /stopFailure\?\.let \{ throw it \}/);

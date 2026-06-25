@@ -875,7 +875,7 @@ When layout constants are part of the behavior contract, update tests to assert 
 
 **Logged**: 2026-06-25T00:42:00+08:00
 **Priority**: high
-**Status**: pending
+**Status**: resolved
 **Area**: backend
 
 ### Summary
@@ -900,6 +900,11 @@ Track the last written audio presentation timestamp and clamp audio muxer writes
 - Reproducible: yes
 - Related Files: uni_modules/xyc-markvideo/utssdk/app-android/XycNativeCameraView.kt
 - See Also: ERR-20260623-007
+
+### Resolution
+- **Resolved**: 2026-06-25T10:46:00+08:00
+- **Commit/PR**: pending
+- **Notes**: Added a muxer-write audio PTS monotonic clamp with `lastAudioPresentationTimeUs`, kept stop-time audio PTS diagnostics, and updated `test/structure.test.mjs` regression guards. Verification: `npm test` passed 36/36, `git diff --check` passed, and SM-N9500 device recording stopped successfully twice with no `out of order`, `invalid state`, or `record stop failed` logs.
 
 ---
 

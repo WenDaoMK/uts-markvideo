@@ -3212,6 +3212,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), TextureView.
         private var muxerStarted = false
         private var videoPresentationOffsetUs = -1L
         private var audioPresentationOffsetUs = -1L
+        private var lastAudioPresentationTimeUs = -1L
         private val reusablePixels = IntArray(frameSize)
         private val reusableYuv = ByteArray(frameSize + quarterFrameSize * 2)
         @Volatile private var lastStage = RECORD_STAGE_RECORDER_IDLE
@@ -3385,6 +3386,12 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), TextureView.
                 videoEncoder = null
                 synchronized(muxerLock) {
                     try {
+                        if (audioSampleCount > 0) {
+                            Log.i(
+                                LOG_TAG,
+                                "record stop audio pts last=${lastAudioPresentationTimeUs}; offset=${audioPresentationOffsetUs}; samples=${audioSampleCount}"
+                            )
+                        }
                         if (muxerStarted && videoSampleCount > 0) {
                             atStage(RECORD_STAGE_MUXER_STOP) {
                                 muxer?.stop()
@@ -3408,6 +3415,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), TextureView.
                     muxerStarted = false
                     videoTrackIndex = -1
                     audioTrackIndex = -1
+                    lastAudioPresentationTimeUs = -1L
                 }
                 finishFailure?.let { throw it }
                 stopFailure?.let { throw it }
@@ -3642,7 +3650,13 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), TextureView.
                         if (audioPresentationOffsetUs < 0L) {
                             audioPresentationOffsetUs = originalPresentationTimeUs
                         }
-                        bufferInfo.presentationTimeUs = max(0L, originalPresentationTimeUs - audioPresentationOffsetUs)
+                        val adjustedPresentationTimeUs = max(0L, originalPresentationTimeUs - audioPresentationOffsetUs)
+                        val safePresentationTimeUs = if (lastAudioPresentationTimeUs < 0L) {
+                            adjustedPresentationTimeUs
+                        } else {
+                            max(lastAudioPresentationTimeUs + 1L, adjustedPresentationTimeUs)
+                        }
+                        bufferInfo.presentationTimeUs = safePresentationTimeUs
                     } else {
                         if (videoPresentationOffsetUs < 0L) {
                             videoPresentationOffsetUs = originalPresentationTimeUs
@@ -3651,6 +3665,9 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), TextureView.
                     }
                     try {
                         activeMuxer.writeSampleData(trackIndex, encodedData, bufferInfo)
+                        if (isAudio) {
+                            lastAudioPresentationTimeUs = bufferInfo.presentationTimeUs
+                        }
                     } finally {
                         bufferInfo.presentationTimeUs = originalPresentationTimeUs
                     }
