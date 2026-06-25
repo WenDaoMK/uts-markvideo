@@ -702,7 +702,7 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /ref="nativeCamera"/);
   assert.match(page, /<view class="cameraViewport" :style="cameraViewportStyleText"><\/view>/);
   assert.match(page, /<xyc-markvideo[\s\S]*class="nativePreview"[\s\S]*:style="cameraViewportStyleText"/);
-  assert.match(page, /<view class="cameraDebugBorder" :style="cameraViewportStyleText"><\/view>/);
+  assert.doesNotMatch(page, /cameraDebugBorder/);
   assert.match(page, /:target-fps="targetFps"/);
   assert.match(page, /targetFps: 30/);
   assert.match(page, /flashMode: 'off'/);
@@ -1423,7 +1423,7 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.doesNotMatch(nativePreviewStyleBlock, /width: 100%|height: 100%|left: 0|top: 0/);
   assert.match(page, /\.topBar \{[\s\S]*z-index: 8;/);
   assert.match(page, /\.zoomRail \{[\s\S]*z-index: 6;/);
-  assert.match(page, /\.cameraDebugBorder \{[\s\S]*border: 1px red solid;[\s\S]*pointer-events: none;[\s\S]*z-index: 7;/);
+  assert.doesNotMatch(page, /border: 1px red solid|#ff0000/);
   assert.match(page, /\.zoomButtonSelected \{[\s\S]*background-color: #ff8a00;[\s\S]*border-color: #ff8a00;/);
   assert.match(page, /\.zoomTextSelected \{[\s\S]*color: #ffffff;/);
   assert.match(page, /\.topTitleBox \{[\s\S]*position: absolute;[\s\S]*left: 0;[\s\S]*right: 0;[\s\S]*top: 16px;[\s\S]*height: 42px;[\s\S]*justify-content: center;/);

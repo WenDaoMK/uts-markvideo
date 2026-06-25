@@ -19,8 +19,6 @@
       @zoomchange="handleZoomChange"
       @camerachange="handleCameraChange"
     />
-    <view class="cameraDebugBorder" :style="cameraViewportStyleText"></view>
-
     <view class="watermarkLayer" :style="watermarkLayerStyleValue()" v-if="activeWatermark != null">
       <view
         class="watermarkGesturePlane"
@@ -3667,13 +3665,6 @@ function roundWatermarkPx(value: number): number {
   position: absolute;
   background-color: #0b100e;
   z-index: 2;
-}
-
-.cameraDebugBorder {
-  position: absolute;
-  border: 1px red solid;
-  pointer-events: none;
-  z-index: 7;
 }
 
 .watermarkLayer {
