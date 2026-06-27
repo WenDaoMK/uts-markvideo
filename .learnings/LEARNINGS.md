@@ -1771,3 +1771,87 @@ CameraX 挂载阶段不能静默预请求麦克风权限，录像权限请求标
 - **Notes**: Removed the `handleCameraReady()` silent microphone preflight, made Android permission request dispatch return a boolean before setting pending flags, and added structure guards. `npm test` passed 36/36, `git diff --check` passed, and HBuilderX reached `项目 uts-markvideo UTS编译完毕`; no Android device was available for a complete runtime grant check.
 
 ---
+
+## [LRN-20260626-003] correction
+
+**Logged**: 2026-06-26T16:38:45+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: ios
+
+### Summary
+`xyc-markvideo` 的 iOS 工作不是调试方案，而是在同一 uni-app x 项目里补齐同名组件的 iOS 原生实现。
+
+### Details
+用户明确纠正：当前目标不是“iOS 调试方案”，而是把 Android 已有相机能力在 `uni_modules/xyc-markvideo/utssdk/app-ios` 下实现一遍原生能力。页面 `pages/cameraX/index.uvue` 要复用，组件表面要复用，差异只应落在 Android / iOS 原生 View 和薄桥接层。做设计或实现时要先对齐 `docs/embedded-camera-component-prd.md` 与 iOS 实现 PRD，不能把 iOS 写成 stub 或只做事件占位。
+
+### Suggested Action
+后续涉及 iOS 相机时，先检查 Android 组件契约和页面实际消费字段，再实现 iOS 原生 View、bridge、payload 和测试。`cameraready` 这类事件必须回传页面实际依赖的字段，而不是只证明“事件存在”。
+
+### Metadata
+- Source: user_feedback
+- Related Files: pages/cameraX/index.uvue, uni_modules/xyc-markvideo/utssdk/app-ios/index.vue, uni_modules/xyc-markvideo/utssdk/app-ios/MarkVideoEmbeddedCameraView.swift, docs/ios-native-camera-prd.md
+- Tags: uni-app-x, ios, native-camera, contract, xyc-markvideo
+
+### Resolution
+- **Resolved**: 2026-06-26T17:23:02+08:00
+- **Commit/PR**: pending
+- **Notes**: Implemented iOS bridge/native camera surface, aligned `cameraready` payload and package support declaration, added Swift typecheck coverage, and verified `npm test`, direct iOS Swift typecheck, and `git diff --check`.
+
+---
+
+## [LRN-20260626-004] best_practice
+
+**Logged**: 2026-06-26T17:23:02+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: ios
+
+### Summary
+iOS Swift commit checks should use an iOS SDK-backed typecheck; `swiftc -parse` alone is not enough.
+
+### Details
+`swiftc -parse` passed for `MarkVideoEmbeddedCameraView.swift`, but subagent audit reproduced a real `CGFloat` extension compile error with `xcrun --sdk iphoneos swiftc -target arm64-apple-ios15.0 -parse-as-library -typecheck`. The parse-only check accepted syntax but did not type-resolve UIKit/CoreGraphics extension calls under the iOS target.
+
+### Suggested Action
+For iOS UTS Swift files, keep `swiftc -parse` as a quick smoke check only. Before commit, run or test-gate `xcrun --sdk iphoneos swiftc -target arm64-apple-ios15.0 -parse-as-library -typecheck <swift file>` when the iOS SDK is available, and keep HBuilderX/DCloud iOS build plus device smoke test as the final runtime proof.
+
+### Metadata
+- Source: subagent_audit, verification
+- Related Files: uni_modules/xyc-markvideo/utssdk/app-ios/MarkVideoEmbeddedCameraView.swift, test/structure.test.mjs
+- Tags: ios, swift, typecheck, xcode, commit-check
+
+### Resolution
+- **Resolved**: 2026-06-26T17:23:02+08:00
+- **Commit/PR**: pending
+- **Notes**: Fixed the `CGFloat.clamped` typecheck error, updated deprecated `AVVideoCodecH264`, and added an iOS SDK-backed Swift typecheck to `npm test` on macOS when the SDK exists.
+
+---
+
+## [LRN-20260627-001] best_practice
+
+**Logged**: 2026-06-27T01:36:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: ios
+
+### Summary
+iOS 相机实现提交前不能只看编译，还要审计页面实际消费的真机功能合同。
+
+### Details
+Subagent commit audit found that iOS Swift 已能编译，但仍有真实验收缺口：首次录像权限只会先请求相机，不会继续触发麦克风；`openSystemAlbum` 试图打开 `PHAsset.localIdentifier`，实际不能作为 URL 打开；视频结果缺缩略图；输出 payload 缺少 `watermarkPhotoBurnIn` / `watermarkVideoBurnIn`；拍照和停止录像期间缺少原生防重入。编译通过不等于 iOS 功能达到 Android 同等合同。
+
+### Suggested Action
+以后补 iOS 原生功能时，按页面合同逐项核对：首次权限链路、相册入口、缩略图、结果字段、防重入状态、前后摄和水印输出。结构测试要覆盖这些合同，真机验收要按首次安装路径验证，不能只用已授权设备复测。
+
+### Metadata
+- Source: subagent_audit, verification
+- Related Files: uni_modules/xyc-markvideo/utssdk/app-ios/MarkVideoEmbeddedCameraView.swift, pages/cameraX/index.uvue, test/structure.test.mjs, README.md
+- Tags: ios, native-camera, permissions, album, watermark, acceptance
+
+### Resolution
+- **Resolved**: 2026-06-27T01:36:00+08:00
+- **Commit/PR**: pending
+- **Notes**: Added iOS record permission chaining, album picker opening, video thumbnail generation, watermark burn-in result fields, and photo/record stop busy guards; verified with iOS SDK Swift typecheck, Node structure tests, and `git diff --check`.
+
+---

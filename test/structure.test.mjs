@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { access, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
@@ -40,13 +41,16 @@ const requiredFiles = [
   'pages.json',
   'pages/index/index.uvue',
   'pages/cameraX/index.uvue',
+  'docs/ios-native-camera-prd.md',
   'docs/watermark-template-camera-prd.md',
+  'scripts/fix-hbuilderx-ios-base-plist.mjs',
   'static/icons/camera-rotate.svg',
   'static/watermark/logo3.png',
   'uni_modules/xyc-markvideo/package.json',
   'uni_modules/xyc-markvideo/utssdk/app-android/XycNativeCameraView.kt',
   'uni_modules/xyc-markvideo/utssdk/app-android/index.vue',
   'uni_modules/xyc-markvideo/utssdk/app-ios/index.vue',
+  'uni_modules/xyc-markvideo/utssdk/app-ios/MarkVideoEmbeddedCameraView.swift',
 ];
 
 const removedPaths = [
@@ -573,7 +577,7 @@ test('app manifest locks the camera MVP to portrait orientations', async () => {
 test('cameraX keeps portrait layout metrics when window reports landscape', async () => {
   const page = await readFile(path.join(root, 'pages/cameraX/index.uvue'), 'utf8');
 
-  assert.match(page, /function normalizePortraitLayoutBounds\(width(?:: number)?, height(?:: number)?\)/);
+  assert.match(page, /function normalizePortraitLayoutBounds\(width(?:: number)?, height(?:: number)?, safeAreaTop(?:: number)?\)/);
   assert.match(page, /width: Math\.min\(safeWidth, safeHeight\)/);
   assert.match(page, /height: Math\.max\(safeWidth, safeHeight\)/);
   assert.doesNotMatch(page, /width: info\.windowWidth \|\| 375/);
@@ -690,8 +694,11 @@ test('uvue runtime value boundaries avoid Android ClassCastException regressions
   assert.match(cameraPage, /handleZoomChange\(event: UTSJSONObject \| null\)/);
   assert.match(cameraPage, /handleCameraChange\(event: UTSJSONObject \| null\)/);
 
-  assert.match(cameraPage, /import \{ XycMarkvideoElement \} from 'uts\.sdk\.modules\.xycMarkvideo'/);
-  assert.match(cameraPage, /resolveNativeCamera\(\)(?:: XycMarkvideoElement \| null)? \{[\s\S]*\$refs\['nativeCamera'\] as XycMarkvideoElement \| null/);
+  assert.doesNotMatch(cameraPage, /from 'uts\.sdk\.modules\.xycMarkvideo'/);
+  assert.doesNotMatch(cameraPage, /type XycMarkvideoElement = \{/);
+  assert.match(cameraPage, /resolveNativeCamera\(\): any \| null \{[\s\S]*const nativeCamera = this\.\$refs\['nativeCamera'\][\s\S]*return nativeCamera != null \? nativeCamera : null/);
+  assert.doesNotMatch(cameraPage, /\$refs\['nativeCamera'\] as /);
+  assert.doesNotMatch(cameraPage, /as XycMarkvideoElement/);
   assert.doesNotMatch(cameraPage, /as NativeCameraRef/);
 
   assert.notEqual(touchPairBody, '', 'watermarkTouchPair body should be inspectable');
@@ -709,8 +716,8 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   const page = await readFile(path.join(root, 'pages/cameraX/index.uvue'), 'utf8');
   const stopBranch = page.match(/this\.isRecording = false[\s\S]*?formatRecordElapsed\(elapsedMs(?:: number)?\)(?:: string)? \{/)?.[0] || '';
   const pressShutterBody = page.match(/async pressShutter\(\): Promise<void> \{[\s\S]*?\n    \},\n    formatRecordElapsed/)?.[0] || '';
-  const startRecordReadyBody = page.match(/async startRecordWithReadyPermissions\(nativeCamera: XycMarkvideoElement\): Promise<void> \{[\s\S]*?\n    \},\n    retryCameraAfterPermission\(\)/)?.[0] || '';
-  const topBar = page.match(/<view class="topBar">[\s\S]*?<view class="recordHud"/)?.[0] || '';
+  const startRecordReadyBody = page.match(/async startRecordWithReadyPermissions\(nativeCamera: any\): Promise<void> \{[\s\S]*?\n    \},\n    retryCameraAfterPermission\(\)/)?.[0] || '';
+  const topBar = page.match(/<view class="topBar" :style="topBarStyle">[\s\S]*?<view class="recordHud"/)?.[0] || '';
   const switchCameraControl = findTagBlock(page, '<view class="switchCameraTapArea"', 'view');
   const recordHud = findTagBlock(page, '<view class="recordHud"', 'view');
   const watermarkArea = findTagBlock(page, '<view class="watermarkLayer"', 'view');
@@ -728,6 +735,7 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /flashPending: false/);
   assert.match(page, /flashCycleMode: 'off'/);
   assert.match(page, /flashLastRequestedMode: 'off'/);
+  assert.match(page, /availableFlashModes: \['off', 'on', 'auto'\] as Array<string>/);
   assert.match(page, /flashEventHandled: false/);
   assert.match(page, /flashEventApplied: true/);
   assert.match(page, /@cameraready="handleCameraReady"/);
@@ -737,7 +745,10 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /@camerachange="handleCameraChange"/);
   assert.match(page, /const PORTRAIT_LAYOUT_FALLBACK_WIDTH = 375/);
   assert.match(page, /const PORTRAIT_LAYOUT_FALLBACK_HEIGHT = 812/);
-  assert.match(page, /const CAMERA_TOP_BAR_HEIGHT = 96/);
+  assert.match(page, /const CAMERA_TOP_BAR_BASE_HEIGHT = 72/);
+  assert.match(page, /const CAMERA_TOP_CONTENT_OFFSET = 18/);
+  assert.match(page, /const CAMERA_TOP_MIN_SAFE_AREA = 24/);
+  assert.match(page, /const CAMERA_TOP_SAFE_AREA_PULLBACK = 10/);
   assert.match(page, /const CAMERA_MODE_SWITCH_HEIGHT = 36/);
   assert.match(page, /const CAMERA_MAIN_CONTROLS_HEIGHT = 88/);
   assert.match(page, /const CAMERA_CONTROLS_MIN_VISIBLE_HEIGHT = 80/);
@@ -756,7 +767,14 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /const RESULT_CACHE_LIMIT = 4/);
   assert.match(page, /resolveScreenBounds\(\)/);
   assert.match(page, /normalizePortraitLayoutBounds\(/);
-  assert.match(page, /resolveCameraViewportBounds\(screen\.width, screen\.height\)/);
+  assert.match(page, /resolveCameraViewportBounds\(screen\.width, screen\.height, screen\.safeAreaTop\)/);
+  assert.match(topBar, /<view class="topSide" :style="topContentStyle">/);
+  assert.match(topBar, /<view class="topTitleBox" :style="topContentStyle">/);
+  assert.match(topBar, /<view class="topRightSide" :style="topContentStyle">/);
+  assert.match(page, /<view class="recordHud" :style="recordHudStyle" v-if="isRecording">/);
+  assert.match(page, /topBarStyle\(\) \{[\s\S]*height: Math\.round\(resolveCameraTopBarHeight\(this\.safeAreaTop as number\)\) \+ 'px'/);
+  assert.match(page, /topContentStyle\(\) \{[\s\S]*top: Math\.round\(resolveCameraTopContentTop\(this\.safeAreaTop as number\)\) \+ 'px'/);
+  assert.match(page, /recordHudStyle\(\) \{[\s\S]*top: Math\.round\(resolveCameraTopBarHeight\(this\.safeAreaTop as number\) \+ 28\) \+ 'px'/);
   assert.match(page, /cameraViewportStyle\(\) \{[\s\S]*const viewport = this\.cameraViewportBounds\(\)[\s\S]*width: Math\.round\(viewport\.width\) \+ 'px'[\s\S]*height: Math\.round\(viewport\.height\) \+ 'px'/);
   assert.match(page, /cameraViewportStyleText\(\) \{[\s\S]*const viewport = this\.cameraViewportBounds\(\)[\s\S]*return 'position:absolute;left:' \+ Math\.round\(viewport\.left\) \+ 'px;top:' \+ Math\.round\(viewport\.top\) \+ 'px;width:' \+ Math\.round\(viewport\.width\) \+ 'px;height:' \+ Math\.round\(viewport\.height\) \+ 'px;'/);
   assert.match(page, /bottomPanelStyle\(\) \{[\s\S]*const panel = this\.cameraBottomPanelBounds\(\)[\s\S]*top: Math\.round\(panel\.top\) \+ 'px'[\s\S]*height: Math\.round\(panel\.height\) \+ 'px'/);
@@ -767,15 +785,15 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /modeSwitchWrapStyle\(\) \{[\s\S]*const panel = this\.cameraBottomPanelBounds\(\)[\s\S]*const layout = resolveCameraControlsLayout\(panel\.height\)[\s\S]*top: Math\.round\(layout\.modeTop\) \+ 'px'[\s\S]*height: Math\.round\(layout\.modeHeight\) \+ 'px'[\s\S]*opacity: layout\.modeOpacity/);
   assert.match(page, /mainControlsStyle\(\) \{[\s\S]*const panel = this\.cameraBottomPanelBounds\(\)[\s\S]*const layout = resolveCameraControlsLayout\(panel\.height\)[\s\S]*top: Math\.round\(layout\.mainTop\) \+ 'px'[\s\S]*transform: 'scale\(' \+ \(Math\.round\(layout\.mainScale \* 1000\) \/ 1000\) \+ '\)'/);
   assert.match(page, /zoomRailStyle\(\) \{[\s\S]*const viewport = this\.cameraViewportBounds\(\)[\s\S]*top: Math\.round\(viewport\.bottom - 56\) \+ 'px'/);
-  assert.match(page, /const usableHeight = Math\.min\(windowHeight, safeAreaBottom\)/);
-  assert.match(page, /function resolveCameraViewportBounds\(width(?:: number)?, height(?:: number)?\)/);
+  assert.match(page, /function resolveCameraViewportBounds\(width(?:: number)?, height(?:: number)?, safeAreaTop(?:: number)?\)/);
+  assert.match(page, /const topBarHeight = resolveCameraTopBarHeight\(safeAreaTop\)/);
   assert.match(page, /const fullTargetHeight = safeWidth \* CAMERA_VIEWPORT_ASPECT_HEIGHT \/ CAMERA_VIEWPORT_ASPECT_WIDTH/);
-  assert.match(page, /const maxTargetHeight = Math\.max\(1, safeHeight - CAMERA_TOP_BAR_HEIGHT - CAMERA_CONTROLS_MIN_VISIBLE_HEIGHT\)/);
+  assert.match(page, /const maxTargetHeight = Math\.max\(1, safeHeight - topBarHeight - CAMERA_CONTROLS_MIN_VISIBLE_HEIGHT\)/);
   assert.match(page, /const targetHeight = Math\.min\(fullTargetHeight, maxTargetHeight\)/);
   assert.match(page, /const targetWidth = targetHeight \* CAMERA_VIEWPORT_ASPECT_WIDTH \/ CAMERA_VIEWPORT_ASPECT_HEIGHT/);
-  assert.match(page, /const top = CAMERA_TOP_BAR_HEIGHT/);
-  assert.match(page, /function resolveCameraBottomPanelBounds\(width(?:: number)?, height(?:: number)?\)/);
-  assert.match(page, /const viewport = resolveCameraViewportBounds\(safeWidth, safeHeight\)/);
+  assert.match(page, /const top = topBarHeight/);
+  assert.match(page, /function resolveCameraBottomPanelBounds\(width(?:: number)?, height(?:: number)?, safeAreaTop(?:: number)?\)/);
+  assert.match(page, /const viewport = resolveCameraViewportBounds\(safeWidth, safeHeight, safeAreaTop\)/);
   assert.match(page, /const top = viewport\.bottom/);
   assert.match(page, /function resolveCameraControlsLayout\(panelHeight(?:: number)?\)(?:: CameraControlsLayout)?/);
   assert.match(page, /const ultraCompact = safePanelHeight < CAMERA_CONTROLS_ULTRA_COMPACT_HEIGHT/);
@@ -790,8 +808,18 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /safeNumber\(info\.windowWidth, PORTRAIT_LAYOUT_FALLBACK_WIDTH\)/);
   assert.match(page, /const windowHeight = safeNumber\(info\.windowHeight, PORTRAIT_LAYOUT_FALLBACK_HEIGHT\)/);
   assert.match(page, /const safeArea = info\.safeArea/);
-  assert.match(page, /const safeAreaBottom = safeArea != null \? safeNumber\(safeArea\.bottom, windowHeight\) : windowHeight/);
-  assert.match(page, /const usableHeight = Math\.min\(windowHeight, safeAreaBottom\)/);
+  assert.match(page, /const statusBarHeight = safeNumber\(info\.statusBarHeight, 0\)/);
+  assert.match(page, /const safeAreaTop = safeArea != null \? safeNumber\(safeArea\.top, statusBarHeight\) : statusBarHeight/);
+  assert.doesNotMatch(page, /const usableHeight = Math\.min\(windowHeight, safeAreaBottom\)/);
+  assert.doesNotMatch(page, /safeNumber\(safeArea\.bottom, windowHeight\)/);
+  assert.match(page, /Math\.max\(1, windowHeight\)/);
+  assert.match(page, /Math\.max\(0, safeAreaTop\)/);
+  assert.match(page, /safeAreaTop: Math\.max\(0, safeNumber\(safeAreaTop, CAMERA_TOP_MIN_SAFE_AREA\)\)/);
+  assert.match(page, /function resolveCameraTopBarHeight\(safeAreaTop(?:: number)?\)(?:: number)?/);
+  assert.match(page, /function resolveCameraTopContentTop\(safeAreaTop(?:: number)?\)(?:: number)?/);
+  assert.match(page, /function resolveCameraTopSafeOffset\(safeAreaTop(?:: number)?\)(?:: number)?/);
+  assert.match(page, /const pulledBackTop = safeNumber\(safeAreaTop, CAMERA_TOP_MIN_SAFE_AREA\) - CAMERA_TOP_SAFE_AREA_PULLBACK/);
+  assert.match(page, /return Math\.max\(CAMERA_TOP_MIN_SAFE_AREA, pulledBackTop\)/);
   assert.match(page, /width: Math\.min\(safeWidth, safeHeight\)/);
   assert.match(page, /height: Math\.max\(safeWidth, safeHeight\)/);
   assert.doesNotMatch(page, /width: info\.windowWidth \|\| 375/);
@@ -800,8 +828,11 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.doesNotMatch(page, /@modechange/);
   assert.doesNotMatch(page, /handleNativeShutter/);
   assert.doesNotMatch(page, /handleNativeMode/);
-  assert.match(page, /import \{ XycMarkvideoElement \} from 'uts\.sdk\.modules\.xycMarkvideo'/);
-  assert.match(page, /resolveNativeCamera\(\)(?:: XycMarkvideoElement \| null)? \{[\s\S]*const nativeCamera = this\.\$refs\['nativeCamera'\] as XycMarkvideoElement \| null/);
+  assert.doesNotMatch(page, /from 'uts\.sdk\.modules\.xycMarkvideo'/);
+  assert.doesNotMatch(page, /type XycMarkvideoElement = \{/);
+  assert.match(page, /resolveNativeCamera\(\): any \| null \{[\s\S]*const nativeCamera = this\.\$refs\['nativeCamera'\][\s\S]*return nativeCamera != null \? nativeCamera : null/);
+  assert.doesNotMatch(page, /\$refs\['nativeCamera'\] as /);
+  assert.doesNotMatch(page, /as XycMarkvideoElement/);
   assert.doesNotMatch(page, /as NativeCameraRef/);
   assert.match(page, /storedWatermarkTemplate\(stored\)/);
   assert.match(page, /storageValueToJSONObject\(value(?:: any \| null)?\)/);
@@ -901,7 +932,8 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /nativeCamera\.takePhoto\(\)/);
   assert.match(page, /handlePhotoDone\(event: UTSJSONObject \| null\)/);
   assert.match(page, /拍照请求已受理|拍照中/);
-  assert.match(page, /nativeCamera\.startRecord\(\{ fps: this\.targetFps \}\)/);
+  assert.match(page, /const optionsText = JSON\.stringify\(\{ fps: this\.targetFps \}\)[\s\S]*nativeCamera\.startRecord\(optionsText != null \? optionsText : '\{\}'\)/);
+  assert.doesNotMatch(page, /nativeCamera\.startRecord\(\{ fps: this\.targetFps \}\)/);
   assert.match(page, /nativeCamera\.stopRecord\(\)/);
   assert.match(page, /WATERMARK_STORAGE_KEY/);
   assert.match(page, /watermarkTemplates/);
@@ -1007,7 +1039,8 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /class="recordBubble"/);
   assert.match(page, /recordDotClass/);
   assert.match(page, /recordElapsedText/);
-  assert.match(page, /:camera-sound-enabled="cameraSoundEnabled"/);
+  assert.match(page, /:sound-enabled="cameraSoundEnabled"/);
+  assert.doesNotMatch(page, /:camera-sound-enabled="cameraSoundEnabled"/);
   assert.match(page, /cameraSoundEnabled: true/);
   assert.match(page, /cameraSoundPending: false/);
   assert.match(page, /cameraSoundPillClass\(\) \{[\s\S]*return this\.cameraSoundEnabled \? \['cameraSoundPill', 'cameraSoundPillActive'\] : \['cameraSoundPill'\]/);
@@ -1049,7 +1082,12 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /this\.flashLastRequestedMode = nextMode/);
   assert.match(page, /flashCycleBaseMode\(visibleMode(?:: string)?, cycleMode(?:: string)?\)(?:: string)? \{[\s\S]*const normalizedVisibleMode = this\.normalizeFlashModeForCycle\(visibleMode, 'off'\)[\s\S]*const normalizedCycleMode = this\.normalizeFlashModeForCycle\(cycleMode, normalizedVisibleMode\)[\s\S]*if \(normalizedVisibleMode == 'off' && normalizedCycleMode == 'auto'\) \{[\s\S]*return normalizedVisibleMode[\s\S]*return normalizedCycleMode/);
   assert.match(page, /normalizeFlashModeForCycle\(mode(?:: string)?, fallbackMode(?:: string)?\)(?:: string)? \{[\s\S]*if \(mode == 'off' \|\| mode == 'on' \|\| mode == 'auto'\) \{[\s\S]*return mode[\s\S]*if \(fallbackMode == 'off' \|\| fallbackMode == 'on' \|\| fallbackMode == 'auto'\) \{[\s\S]*return fallbackMode[\s\S]*return 'off'/);
-  assert.match(page, /const normalizedMode = this\.normalizeFlashModeForCycle\(currentFlashMode, 'off'\)[\s\S]*return normalizedMode == 'off' \? 'on' : \(normalizedMode == 'on' \? 'auto' : 'off'\)/);
+  assert.match(page, /const normalizedMode = this\.normalizeFlashModeForCycle\(currentFlashMode, 'off'\)[\s\S]*const modes = normalizeAvailableFlashModes\(this\.availableFlashModes\)[\s\S]*return modes\[nextIndex\]/);
+  assert.doesNotMatch(page, /return normalizedMode == 'off' \? 'on' : \(normalizedMode == 'on' \? 'auto' : 'off'\)/);
+  assert.match(page, /updateAvailableFlashModes\(value(?:: any \| null)?\)(?:: void)? \{[\s\S]*const modes = normalizeAvailableFlashModes\(value\)[\s\S]*this\.availableFlashModes = modes[\s\S]*this\.flashCycleMode = this\.flashMode/);
+  assert.match(page, /function normalizeAvailableFlashModes\(value(?:: any \| null)?\)(?:: Array<string>)? \{[\s\S]*const modes: Array<string> = \['off'\][\s\S]*mode == 'on' \|\| mode == 'auto'[\s\S]*if \(modes\.length == 1 && rawModes\.length <= 0\)/);
+  assert.match(page, /applyNativeCameraState\(detail(?:: UTSJSONObject \| null)?\)(?:: void)? \{[\s\S]*this\.updateAvailableFlashModes\(detail\['supportedFlashModes'\]\)[\s\S]*this\.updateAvailableZoomModes\(detail\['availableZoomModes'\]\)/);
+  assert.match(page, /handleFlashChange\(event(?:: UTSJSONObject \| null)?\)(?:: void)? \{[\s\S]*this\.updateAvailableFlashModes\(detail\['supportedFlashModes'\]\)[\s\S]*this\.flashEventHandled = true/);
   assert.match(page, /this\.flashPending = true/);
   assert.match(page, /this\.nativeStatus = '闪光灯切换中'/);
   assert.match(page, /cycleFlashMode\(\)[\s\S]*this\.triggerHaptic\('light'\)[\s\S]*const currentFlashMode = this\.flashMode/);
@@ -1112,10 +1150,10 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.doesNotMatch(pressShutterBody, /nativeCamera\.startRecord\(\{ fps: this\.targetFps \}\)/);
   assert.notEqual(startRecordReadyBody, '', 'startRecordWithReadyPermissions body should be inspectable');
   assert.match(startRecordReadyBody, /if \(this\.activeWatermark != null && !await this\.flushWatermarkSync\(true\)\)/);
-  assert.match(startRecordReadyBody, /this\.recordStartPending = true[\s\S]*this\.startRecordPendingTimeout\(\)[\s\S]*nativeCamera\.startRecord\(\{ fps: this\.targetFps \}\)/);
-  assert.match(startRecordReadyBody, /nativeCamera\.startRecord\(\{ fps: this\.targetFps \}\)/);
+  assert.match(startRecordReadyBody, /this\.recordStartPending = true[\s\S]*this\.startRecordPendingTimeout\(\)[\s\S]*const optionsText = JSON\.stringify\(\{ fps: this\.targetFps \}\)[\s\S]*nativeCamera\.startRecord\(optionsText != null \? optionsText : '\{\}'\)/);
+  assert.doesNotMatch(startRecordReadyBody, /nativeCamera\.startRecord\(\{ fps: this\.targetFps \}\)/);
   assert.doesNotMatch(startRecordReadyBody, /prepareRecordPermissions\(/);
-  assert.match(page, /normalizeNativeCommandReturn\(await nativeCamera\.setWatermark\(payload\), '水印设置失败', '水印已更新', \['12', '14'\]\)/);
+  assert.match(page, /const payloadText = JSON\.stringify\(payload\)[\s\S]*normalizeNativeCommandReturn\(await nativeCamera\.setWatermark\(payloadText != null \? payloadText : '\{\}'\), '水印设置失败', '水印已更新', \['12', '14'\]\)/);
   assert.match(page, /normalizeNativeCommandReturn\(await nativeCamera\.takePhoto\(\), '拍照失败', '拍照中', \['10', '11', '13', '14'\]\)/);
   assert.match(page, /nativeResultFromJSONObject\(source: UTSJSONObject, fallbackMessage: string\)[\s\S]*const rawData = source\['data'\]/);
   assert.match(topBar, /<text :class="flashIconClass">⚡︎<\/text>/);
@@ -1213,7 +1251,8 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /class="watermarkPreview"/);
   const visibleFrameBody = page.match(/watermarkVisibleFrame\(\)(?:: WatermarkFrame)? \{[\s\S]*?\n    \},\n    watermarkInteractionFrame/)?.[0] || '';
   assert.match(page, /if \(this\.activeWatermark != null && !await this\.flushWatermarkSync\(true\)\) \{[\s\S]*return[\s\S]*nativeCamera\.takePhoto\(\)/);
-  assert.match(page, /if \(this\.activeWatermark != null && !await this\.flushWatermarkSync\(true\)\) \{[\s\S]*return[\s\S]*nativeCamera\.startRecord\(\{ fps: this\.targetFps \}\)/);
+  assert.match(page, /if \(this\.activeWatermark != null && !await this\.flushWatermarkSync\(true\)\) \{[\s\S]*return[\s\S]*const optionsText = JSON\.stringify\(\{ fps: this\.targetFps \}\)[\s\S]*nativeCamera\.startRecord\(optionsText != null \? optionsText : '\{\}'\)/);
+  assert.doesNotMatch(page, /nativeCamera\.startRecord\(\{ fps: this\.targetFps \}\)/);
   assert.match(page, /modeThumbClass/);
   assert.doesNotMatch(page, /videoModeButtonClass/);
   assert.doesNotMatch(page, /photoModeButtonClass/);
@@ -1463,15 +1502,18 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.doesNotMatch(page, /cameraDebugBorder/);
   assert.match(page, /\.zoomButtonSelected \{[\s\S]*background-color: #ff8a00;[\s\S]*border-color: #ff8a00;/);
   assert.match(page, /\.zoomTextSelected \{[\s\S]*color: #ffffff;/);
-  assert.match(recordHud, /<view class="recordHud" v-if="isRecording">/);
+  assert.match(recordHud, /<view class="recordHud" :style="recordHudStyle" v-if="isRecording">/);
   assert.match(recordHud, /:class="recordDotClass"/);
   assert.match(recordHud, /\{\{ recordElapsedText \}\}/);
   assert.match(page, /\.recordBubble \{[\s\S]*position: relative;[\s\S]*width: 112px;[\s\S]*height: 32px;[\s\S]*background-color: rgba\(17, 25, 23, 0\.82\);/);
   assert.match(page, /\.recordDot \{[\s\S]*position: absolute;[\s\S]*left: 18px;[\s\S]*top: 12px;[\s\S]*width: 8px;[\s\S]*height: 8px;/);
   assert.match(page, /\.recordHudText \{[\s\S]*width: 112px;[\s\S]*height: 32px;[\s\S]*color: #ffffff;[\s\S]*text-align: center;[\s\S]*line-height: 32px;/);
   assert.match(page, /\.recordHud \{[\s\S]*top: 124px;[\s\S]*height: 34px;/);
+  assert.match(page, /recordHudStyle\(\) \{[\s\S]*resolveCameraTopBarHeight\(this\.safeAreaTop as number\) \+ 28/);
   assert.match(page, /\.topTitleBox \{[\s\S]*position: absolute;[\s\S]*left: 0;[\s\S]*right: 0;[\s\S]*top: 42px;[\s\S]*height: 42px;[\s\S]*justify-content: center;/);
   assert.match(page, /\.topBar \{[\s\S]*height: 96px;/);
+  assert.match(page, /topBarStyle\(\) \{[\s\S]*resolveCameraTopBarHeight\(this\.safeAreaTop as number\)/);
+  assert.match(page, /topContentStyle\(\) \{[\s\S]*resolveCameraTopContentTop\(this\.safeAreaTop as number\)/);
   assert.match(page, /\.topSide \{[\s\S]*position: absolute;[\s\S]*left: 14px;[\s\S]*top: 42px;/);
   assert.match(page, /\.topRightSide \{[\s\S]*position: absolute;[\s\S]*right: 14px;[\s\S]*top: 42px;/);
   assert.match(page, /color: #ffffff/);
@@ -1972,24 +2014,153 @@ test('uvue and uts component styles avoid unsupported CSS values', async () => {
   }
 });
 
-test('xyc-markvideo package keeps the Android component support declaration', async () => {
+test('xyc-markvideo package declares Android and iOS component support', async () => {
   const pkg = JSON.parse(await readFile(
     path.join(root, 'uni_modules/xyc-markvideo/package.json'),
     'utf8',
   ));
+  const iosBridge = await readFile(
+    path.join(root, 'uni_modules/xyc-markvideo/utssdk/app-ios/index.vue'),
+    'utf8',
+  );
+  const iosNative = await readFile(
+    path.join(root, 'uni_modules/xyc-markvideo/utssdk/app-ios/MarkVideoEmbeddedCameraView.swift'),
+    'utf8',
+  );
 
   assert.equal(pkg.id, 'xyc-markvideo');
   assert.equal(pkg.name, 'xyc-markvideo');
   assert.equal(pkg.dcloudext.type, 'component-uts');
   assert.equal(pkg.uni_modules.platforms.client.Vue.vue3, 'y');
   assert.equal(pkg.uni_modules.platforms.client.App['app-android'], 'y');
-  assert.equal(pkg.uni_modules.platforms.client.App['app-ios'], '-');
+  assert.equal(pkg.uni_modules.platforms.client.App['app-ios'], 'y');
   assert.equal(pkg.uni_modules.platforms.client['uni-app'].app.nvue, 'y');
   assert.equal(pkg.uni_modules.platforms.client['uni-app'].app.android, 'y');
   assert.equal(pkg.uni_modules.platforms.client['uni-app'].app.ios, '-');
   assert.equal(pkg.uni_modules.platforms.client['uni-app-x'].app.android, 'y');
-  assert.equal(pkg.uni_modules.platforms.client['uni-app-x'].app.ios, '-');
+  assert.equal(pkg.uni_modules.platforms.client['uni-app-x'].app.ios, 'y');
   assert.match(pkg.dcloudext.declaration.permissions, /写入相册权限/);
+  assert.match(iosBridge, /new MarkVideoEmbeddedCameraView\(\)/);
+  assert.match(iosBridge, /view\.mountCamera\(0, 0, 'back', '1x', false\)/);
+  assert.doesNotMatch(iosBridge, /EmbeddedCameraResult|parseResult\(|emitResult\(|currentTemplate/);
+  assert.match(iosBridge, /function nativeViewUnavailable\(\): string/);
+  assert.match(iosBridge, /function ok\(data: any = \{\}\): string/);
+  assert.match(iosBridge, /soundEnabled: \{[\s\S]*type: Boolean,[\s\S]*default: true/);
+  assert.doesNotMatch(iosBridge, /cameraSoundEnabled: \{[\s\S]*type: Boolean,[\s\S]*default: true/);
+  assert.match(iosBridge, /view\.setCameraSoundEnabled\(this\.soundEnabled\)/);
+  assert.match(iosBridge, /performHapticFeedback\(type: string\): string/);
+  assert.match(iosBridge, /startRecord\(optionsJSON: string\): string/);
+  assert.match(iosBridge, /openSystemAlbum\(mediaUri: string\): string/);
+  assert.doesNotMatch(iosBridge, /performHapticFeedback\(type: string = 'light'\)|startRecord\(options: any = \{\}\)|openSystemAlbum\(mediaUri: string = ''\)/);
+  assert.match(iosBridge, /parsePayloadMap\(text: string\): Map<string, any> \{[\s\S]*return parsePayload\(text\)\.toMap\(\)/);
+  assert.match(iosBridge, /this\.\$emit\('nativeviewready', new Map<string, any>\(\)\)/);
+  assert.match(iosBridge, /watch:\s*\{[\s\S]*mode:[\s\S]*this\.switchMode\(newValue\)[\s\S]*targetFps:[\s\S]*handler\(newValue: number \| null, oldValue: number \| null\)[\s\S]*newValue != null && newValue != oldValue && view != null[\s\S]*view!\.setTargetFps\(newValue!\)/);
+  assert.match(iosBridge, /return view!\.switchMode\(mode\)[\s\S]*return view!\.setFlashMode\(mode\)[\s\S]*return view!\.openSystemAlbum\(mediaUri\)/);
+  assert.match(iosBridge, /setWatermark\(templateJSON: string\): string \{[\s\S]*return view!\.setWatermark\(templateJSON\)/);
+  assert.match(iosBridge, /startRecord\(optionsJSON: string\): string \{[\s\S]*return view!\.startRecord\(optionsJSON\)/);
+  assert.match(iosBridge, /takePhoto\(\): string \{[\s\S]*return view!\.takePhoto\('\{\}'\)/);
+  assert.doesNotMatch(iosBridge, /parseResult\(view\.mountCamera/);
+  assert.match(iosBridge, /view\.setEventCallback\(/);
+  assert.doesNotMatch(iosBridge, /view\.setEventHandlers\(/);
+  assert.equal((iosBridge.match(/this\.\$emit\('nativeviewready'/g) ?? []).length, 1);
+  assert.match(iosBridge, /nativeImagePath\?: string/);
+  assert.match(iosBridge, /opacity\?: number/);
+  assert.match(iosNative, /public func setFlashMode\(_ mode: String\) -> String/);
+  assert.match(iosNative, /public func setZoomMode\(_ nextZoom: String\) -> String/);
+  assert.match(iosNative, /public func setTargetFps\(_ fps: NSNumber\)/);
+  assert.match(iosNative, /targetFps = max\(15, min\(30, fps\.intValue\)\)/);
+  assert.match(iosNative, /CMTimeScale\(max\(1, targetFps\)\)/);
+  assert.match(iosNative, /private func cameraReadyPayload\(requestedPreviewWidth: CGFloat, requestedPreviewHeight: CGFloat\) -> \[String: Any\]/);
+  assert.match(iosNative, /payload\["fps"\] = targetFps/);
+  assert.match(iosNative, /"availableZoomModes": availableZooms\(\)/);
+  assert.match(iosNative, /"availableCameraFacings": availableCameraFacings\(\)/);
+  assert.match(iosNative, /requestAccess\(for: \.video\)[\s\S]*_ = self\.mountCamera/);
+  assert.match(iosNative, /private var recordPermissionPreparationPending = false/);
+  assert.match(iosNative, /prepareRecordPermissions\(\) -> String \{[\s\S]*recordPermissionPreparationPending = true[\s\S]*requestVideoAccessIfNeeded\(\)[\s\S]*requestAudioAccessIfNeeded\(\)[\s\S]*recordPermissionPreparationPending = false/);
+  assert.match(iosNative, /if self\.recordPermissionPreparationPending \{[\s\S]*_ = self\.requestAudioAccessIfNeeded\(\)/);
+  assert.match(iosNative, /case \.authorized:[\s\S]*audioPermissionRequestPending = false[\s\S]*recordPermissionPreparationPending = false[\s\S]*return \.ok/);
+  assert.match(iosNative, /NSNumber\(value: Double\(self\.pendingPreviewWidth\)\)/);
+  assert.doesNotMatch(iosNative, /NSNumber\(value: Double\(max\(1, self\.pendingPreviewWidth\)\)\)/);
+  assert.match(iosNative, /emitCameraReadyIfPreviewBoundsChanged\(\)/);
+  assert.match(iosNative, /private func requestAudioAccessIfNeeded\(\) -> NativeStatus \{[\s\S]*return NativeStatus\(false, "1003", "请授权麦克风权限", "permission request is pending"\)/);
+  assert.match(iosNative, /finishRecordingOnWriterQueue\(\)/);
+  assert.match(iosNative, /private var photoBusy = false/);
+  assert.match(iosNative, /private var recordStopPending = false/);
+  assert.match(iosNative, /public func performHapticFeedback\(_ type: String\) -> String \{[\s\S]*DispatchQueue\.main\.async \{[\s\S]*UIImpactFeedbackGenerator\(style: \.light\)[\s\S]*generator\.prepare\(\)[\s\S]*generator\.impactOccurred\(\)[\s\S]*"applied": true/);
+  assert.match(iosNative, /guard !recordStopPending else \{[\s\S]*"takePhoto while record stop pending"/);
+  assert.match(iosNative, /guard !photoBusy else \{[\s\S]*"takePhoto while photoBusy"/);
+  assert.match(iosNative, /photoBusy = true[\s\S]*defer \{[\s\S]*self\.photoBusy = false/);
+  assert.match(iosNative, /guard !recordStopPending else \{[\s\S]*"startRecord while stop pending"/);
+  assert.match(iosNative, /guard !photoBusy else \{[\s\S]*"startRecord while photoBusy"/);
+  assert.match(iosNative, /if recordStopPending \{[\s\S]*return ok\(\["message": "视频保存中"\]\)/);
+  assert.match(iosNative, /recordStopPending = true[\s\S]*setRecording\(false\)/);
+  assert.match(iosNative, /self\.recordStopPending = false[\s\S]*self\.emit\("recorddone", data\)/);
+  assert.doesNotMatch(iosNative, /NSSelectorFromString\("openPhotos"\)|perform\(selector\)/);
+  assert.match(iosNative, /UIImagePickerControllerDelegate, UINavigationControllerDelegate/);
+  assert.match(iosNative, /public func openSystemAlbum\(_ mediaUri: String\) -> String \{[\s\S]*UIImagePickerController\.isSourceTypeAvailable\(\.photoLibrary\)[\s\S]*let access = requestPhotoReadAccessForAlbum\(target\)[\s\S]*presentSystemAlbum\(target\)[\s\S]*"message": access\.pending \? "请授权相册权限" : "已打开系统相册"/);
+  assert.match(iosNative, /private func presentSystemAlbum\(_ target: String\)[\s\S]*let picker = UIImagePickerController\(\)[\s\S]*picker\.sourceType = \.photoLibrary[\s\S]*presenter\.present\(picker, animated: true\)/);
+  assert.match(iosNative, /private func requestPhotoReadAccessForAlbum\(_ target: String\) -> \(granted: Bool, pending: Bool\) \{[\s\S]*PHPhotoLibrary\.authorizationStatus\(for: \.readWrite\)[\s\S]*PHPhotoLibrary\.requestAuthorization\(for: \.readWrite\)[\s\S]*self\.presentSystemAlbum\(target\)[\s\S]*Photo library read permission denied/);
+  assert.match(iosNative, /private func topMostViewController\(\) -> UIViewController\?/);
+  assert.match(iosNative, /requestPhotoWriteAccessSynchronously\(\) -> \(granted: Bool, pending: Bool\)/);
+  assert.match(iosNative, /\["text", "image", "mixed", "title_text", "title_subtitle_text", "image_title_subtitle"\]\.contains\(templateType\)/);
+  assert.match(iosNative, /var imagePath = string\(raw\["nativeImagePath"\], string\(raw\["imagePath"\]\)\)/);
+  assert.match(iosNative, /templateType == "title_subtitle_text" \|\| templateType == "text"/);
+  assert.match(iosNative, /templateType == "image" \|\| templateType == "mixed"/);
+  assert.match(iosNative, /var requiresImage: Bool/);
+  assert.match(iosNative, /template\.boxBackgroundColor\.embeddedCameraColorByMultiplyingAlpha\(template\.opacity\)/);
+  assert.match(iosNative, /return ok\(\["message": "拍照请求已受理"\]\)/);
+  assert.match(iosNative, /return ok\(\["message": "视频保存中"\]\)/);
+  assert.match(iosNative, /writerQueue\.async \{ \[weak self\]/);
+  assert.match(iosNative, /storeLatestVideoPixelBuffer\(sourceBuffer\)/);
+  assert.match(iosNative, /guard isRecording\(\) else \{ return \}/);
+  assert.match(iosNative, /renderCameraAlignedFrame\(from: sourceBuffer, to: targetBuffer\)[\s\S]*drawWatermark\(into: targetBuffer/);
+  assert.match(iosNative, /private func renderCameraAlignedFrame\(from sourceBuffer: CVPixelBuffer, to targetBuffer: CVPixelBuffer\) \{[\s\S]*if cameraFacing == "front" \{[\s\S]*CGAffineTransform\(translationX: width, y: 0\)\.scaledBy\(x: -1, y: 1\)[\s\S]*ciContext\.render\(mirrored, to: targetBuffer\)[\s\S]*ciContext\.render\(sourceImage, to: targetBuffer\)/);
+  assert.match(iosNative, /let thumbnailPath = self\.createVideoThumbnail\(from: url\)/);
+  assert.match(iosNative, /private func createVideoThumbnail\(from url: URL\) -> String \{[\s\S]*AVURLAsset\(url: url\)[\s\S]*AVAssetImageGenerator\(asset: asset\)[\s\S]*writeThumbnailTempFile/);
+  assert.match(iosNative, /private func writeThumbnailTempFile\(_ image: UIImage\) -> String/);
+  assert.match(iosNative, /PHPhotoLibrary\.requestAuthorization\(for: \.addOnly\)[\s\S]*semaphore\.signal\(\)[\s\S]*semaphore\.wait\(timeout: \.now\(\) \+ 30\)/);
+  assert.match(iosNative, /static func outputTransform\(template: EmbeddedWatermarkTemplate, canvasSize: CGSize\) -> WatermarkOutputTransform/);
+  assert.match(iosNative, /previewWidth \/ max\(1, canvasSize\.width\)[\s\S]*previewHeight \/ max\(1, canvasSize\.height\)/);
+  assert.match(iosNative, /let requestedImageWidth = template\.imageWidth \* transform\.previewToOutputScale[\s\S]*let requestedImageHeight = template\.imageHeight \* transform\.previewToOutputScale/);
+  assert.match(iosNative, /let maxImageWidth = hasText \? contentRect\.width \* 0\.38 : contentRect\.width/);
+  assert.match(iosNative, /let imageFitScale = min\([\s\S]*maxImageWidth \/ max\(1, requestedImageWidth\),[\s\S]*contentRect\.height \/ max\(1, requestedImageHeight\)[\s\S]*\)/);
+  assert.match(iosNative, /let imageWidth = requestedImageWidth \* imageFitScale[\s\S]*let imageHeight = requestedImageHeight \* imageFitScale/);
+  assert.doesNotMatch(iosNative, /let imageWidth = min\(template\.imageWidth \* transform\.previewToOutputScale, contentRect\.width \* 0\.38\)[\s\S]*let imageHeight = min\(template\.imageHeight \* transform\.previewToOutputScale, contentRect\.height\)/);
+  assert.match(iosNative, /template\.mainTitleFontSize \* transform\.previewToOutputScale/);
+  assert.match(iosNative, /"watermarkPhotoBurnIn": template != nil/);
+  assert.match(iosNative, /"watermarkVideoBurnIn": template != nil/);
+  assert.match(iosNative, /if !thumbnailPath\.isEmpty \{[\s\S]*data\["thumbnailPath"\] = thumbnailPath/);
+  assert.match(iosNative, /supportedFlashModes": activeDevice\?\.hasTorch == true \? \["off", "on"\] : \["off"\]/);
+  assert.doesNotMatch(iosNative, /EmbeddedWatermarkPreviewView|UIGestureRecognizerDelegate|handleWatermarkDrag|watermarkView/);
+  assert.doesNotMatch(iosBridge, /watermarkpositionchange/);
+  assert.doesNotMatch(iosNative, /class MarkVideoRecorder/);
+});
+
+test('xyc-markvideo iOS native Swift typechecks when iOS SDK is available', { skip: process.platform !== 'darwin' }, () => {
+  const swiftPath = path.join(root, 'uni_modules/xyc-markvideo/utssdk/app-ios/MarkVideoEmbeddedCameraView.swift');
+  const sdk = spawnSync('xcrun', ['--sdk', 'iphoneos', '--show-sdk-path'], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  if (sdk.status !== 0) {
+    assert.skip(`iOS SDK unavailable: ${sdk.stderr || sdk.stdout}`);
+  }
+
+  const result = spawnSync('xcrun', [
+    '--sdk',
+    'iphoneos',
+    'swiftc',
+    '-target',
+    'arm64-apple-ios15.0',
+    '-parse-as-library',
+    '-typecheck',
+    swiftPath,
+  ], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
 test('xyc-markvideo Android component bridges to native camera view', async () => {
@@ -2014,18 +2185,19 @@ test('xyc-markvideo Android component bridges to native camera view', async () =
   assert.doesNotMatch(android, /'modechange'/);
   assert.doesNotMatch(android, /\$emit\('shuttertap'/);
   assert.doesNotMatch(android, /\$emit\('modechange'/);
-  assert.match(android, /cameraSoundEnabled: \{[\s\S]*type: Boolean,[\s\S]*default: true/);
+  assert.match(android, /soundEnabled: \{[\s\S]*type: Boolean,[\s\S]*default: true/);
+  assert.doesNotMatch(android, /cameraSoundEnabled: \{[\s\S]*type: Boolean,[\s\S]*default: true/);
   assert.match(android, /statusText: \{[\s\S]*type: String,[\s\S]*default: ''/);
   assert.doesNotMatch(android, /XYC native camera preview/);
-  assert.doesNotMatch(android, /cameraSoundEnabled: \{[\s\S]*handler\(newValue : boolean, oldValue : boolean\)[\s\S]*setCameraSoundEnabled\(newValue\)/);
+  assert.doesNotMatch(android, /soundEnabled: \{[\s\S]*handler\(newValue : boolean, oldValue : boolean\)[\s\S]*setCameraSoundEnabled\(newValue\)/);
   assert.match(android, /expose: \['setStatus', 'switchMode', 'setFlashMode', 'setZoomMode', 'switchCamera', 'setCameraSoundEnabled', 'performHapticFeedback', 'setWatermark', 'clearWatermark', 'takePhoto', 'startRecord', 'stopRecord', 'openSystemAlbum', 'restartCamera', 'preparePermissions', 'prepareRecordPermissions', 'checkRecordPermissions', 'destroyCamera'\]/);
   assert.match(android, /switchMode\(mode : string\)/);
   assert.match(android, /setFlashMode\(mode : string\) : string/);
   assert.match(android, /setZoomMode\(mode : string\) : string/);
   assert.match(android, /switchCamera\(\) : string/);
   assert.match(android, /setCameraSoundEnabled\(enabled : boolean\) : string/);
-  assert.match(android, /performHapticFeedback\(type : string = 'light'\) : string/);
-  assert.match(android, /setWatermark\(template : any\) : string/);
+  assert.match(android, /performHapticFeedback\(type : string\) : string/);
+  assert.match(android, /setWatermark\(templateJSON : string\) : string/);
   assert.match(android, /clearWatermark\(\) : string/);
   assert.match(android, /nativeViewUnavailable\(\) : string/);
   assert.doesNotMatch(android, /type NativeCameraResult/);
@@ -2034,13 +2206,16 @@ test('xyc-markvideo Android component bridges to native camera view', async () =
   assert.match(android, /return view\.switchCamera\(\)/);
   assert.match(android, /return view\.setCameraSoundEnabled\(enabled\)/);
   assert.match(android, /return view\.performHapticFeedback\(type\)/);
-  assert.match(android, /view\.setCameraSoundEnabled\(this\.cameraSoundEnabled\)/);
+  assert.match(android, /view\.setCameraSoundEnabled\(this\.soundEnabled\)/);
   assert.doesNotMatch(android, /JSON\.parse<NativeCameraResult>\(text\)/);
   assert.doesNotMatch(android, /JSON\.parse\(text\) as NativeCameraResult/);
   assert.match(android, /takePhoto\(\)/);
-  assert.match(android, /startRecord\(options : any = \{\}\)/);
+  assert.match(android, /startRecord\(optionsJSON : string\)/);
+  assert.match(android, /return view\.setWatermark\(templateJSON\)/);
+  assert.match(android, /return view\.startRecord\(optionsJSON\)/);
+  assert.doesNotMatch(android, /function encode\(value : any\)/);
   assert.match(android, /stopRecord\(\)/);
-  assert.match(android, /openSystemAlbum\(mediaUri : string = ''\) : string/);
+  assert.match(android, /openSystemAlbum\(mediaUri : string\) : string/);
   assert.match(android, /return view\.openSystemAlbum\(mediaUri\)/);
   assert.match(android, /preparePermissions\(\)/);
   assert.match(android, /prepareRecordPermissions\(\)/);

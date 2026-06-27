@@ -20,20 +20,32 @@
 - 原生相机预览中可以看到水印。
 - 页面负责拍照、录像和保存等业务控制。
 - Android 侧当前实现包含 Camera legacy preview、`PixelCopy`、`AudioRecord`、`MediaCodec`、`MediaMuxer`。
-- iOS 侧当前只保留同名组件骨架，后续再补齐原生实现。
+- iOS 侧当前已补齐同名组件的原生预览、拍照、录像、相册保存和水印烧录实现。
 - 不涉及 push-stream、RTMP、WebRTC 服务端。
 
-这个 MVP 的目标是先证明产品闭环：水印模板、拍照、录像、保存、Android 真机体验。等流程稳定后，再考虑把 Android 帧处理替换为 OpenGL 或 CameraX effect pipeline，把 iOS 水印处理补齐并继续优化为 Metal/CoreImage 等生产方案。
+这个 MVP 的目标是先证明产品闭环：水印模板、拍照、录像、保存、Android/iOS 真机体验。等流程稳定后，再考虑把 Android 帧处理替换为 OpenGL 或 CameraX effect pipeline，把 iOS 水印处理继续优化为 Metal/CoreImage 等生产方案。
 
 ## 运行方式
 
 1. 用 HBuilderX 打开 `/Users/chaixixi/od/uts-markvideo`。
 2. 确认当前分支是 `markvideo-mvp-uvue`。
-3. 运行到 Android App。
+3. 运行到 Android App 或 iOS App。
 4. 在首页打开水印设置，选择纯文字、纯图片或图文模板。
 5. 进入 `cameraX` 相机业务页。
 6. 验证预览水印可拖拽、缩放、旋转、删除。
 7. 验证拍照、录像、保存后的本地媒体是否带有水印。
+
+iOS 首次真机验收还要覆盖：直接点击录像时相机和麦克风权限是否连续弹出，左下角入口是否能打开系统相册，录像结果是否生成缩略图，拍照和录像结果字段是否包含水印烧录状态。
+
+## iOS 真机运行注意
+
+经典 nvue 调试基座和 uni-app x 调试基座不是同一套链路。当前项目走 `uniappx-launcher`，如果 HBuilderX 5.07 在 iOS 标准基座重签后报 `Invalid binary plist. Expected 'bplist'`，先运行：
+
+```bash
+node scripts/fix-hbuilderx-ios-base-plist.mjs
+```
+
+该脚本只修正生成物里的 `Payload/*.app/Info.plist` 格式，默认处理 HBuilderX 的 `iPhone_base_signed.ipa` 和本项目 `unpackage/debug/iOS_debug_5.07.ipa`。如果 HBuilderX 重新重签或使用 `--cleanCache true` 后问题复现，重新运行脚本，再不带 clean cache 重跑到 iOS 真机。
 
 ## 重要路径
 
@@ -48,13 +60,14 @@
 - `uni_modules/xyc-markvideo/package.json` - UTS 标准组件插件元数据。
 - `uni_modules/xyc-markvideo/utssdk/app-android/index.vue` - Android UTS 组件桥接入口。
 - `uni_modules/xyc-markvideo/utssdk/app-android/XycNativeCameraView.kt` - Android 原生相机 View，负责预览、拍照、录像、相册保存和水印烧录。
-- `uni_modules/xyc-markvideo/utssdk/app-ios/index.vue` - iOS 同名组件骨架，当前包元数据暂不声明 iOS 支持。
+- `uni_modules/xyc-markvideo/utssdk/app-ios/index.vue` - iOS UTS 组件桥接入口。
+- `uni_modules/xyc-markvideo/utssdk/app-ios/MarkVideoEmbeddedCameraView.swift` - iOS 原生相机 View，负责预览、拍照、录像、相册保存和水印烧录。
 
 ## 分支约定
 
 - `dev`：阶段性集成分支。
 - `markvideo-mvp`：当前 MVP 基线分支。
-- `markvideo-mvp-uvue`：从 `markvideo-mvp` 拆出的 uni-app x / `.uvue` 迁移分支，先保持 Android 闭环，iOS 后续补齐。
+- `markvideo-mvp-uvue`：从 `markvideo-mvp` 拆出的 uni-app x / `.uvue` 迁移分支，保持 `pages/cameraX/index.uvue` 复用，并在 Android/iOS 下分别接入原生实现。
 - `markvideo-plugin`：MVP 稳定后再抽取 `uni_modules/xyc-markvideo` 的插件化分支。
 - 旧 `ios`、`android`、`android-sn9500` 分支只作为历史参考，不再作为当前主开发入口。
 

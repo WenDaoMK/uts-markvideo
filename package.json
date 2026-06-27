@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "fix:ios-base-plist": "node scripts/fix-hbuilderx-ios-base-plist.mjs",
     "test": "node --test test/*.test.mjs"
   }
 }

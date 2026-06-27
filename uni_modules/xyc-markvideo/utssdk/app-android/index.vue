@@ -28,7 +28,7 @@
         type: Number,
         default: 30
       },
-      cameraSoundEnabled: {
+      soundEnabled: {
         type: Boolean,
         default: true
       },
@@ -164,19 +164,19 @@
         }
         return view.setCameraSoundEnabled(enabled);
       },
-      performHapticFeedback(type : string = 'light') : string {
+      performHapticFeedback(type : string) : string {
         const view = this.requireCameraView();
         if (view == null) {
           return nativeViewUnavailable();
         }
         return view.performHapticFeedback(type);
       },
-      setWatermark(template : any) : string {
+      setWatermark(templateJSON : string) : string {
         const view = this.requireCameraView();
         if (view == null) {
           return nativeViewUnavailable();
         }
-        return view.setWatermark(encode(template));
+        return view.setWatermark(templateJSON);
       },
       clearWatermark() : string {
         const view = this.requireCameraView();
@@ -192,12 +192,12 @@
         }
         return view.takePhoto();
       },
-      startRecord(options : any = {}) : string {
+      startRecord(optionsJSON : string) : string {
         const view = this.requireCameraView();
         if (view == null) {
           return nativeViewUnavailable();
         }
-        return view.startRecord(encode(options));
+        return view.startRecord(optionsJSON);
       },
       stopRecord() : string {
         const view = this.requireCameraView();
@@ -206,7 +206,7 @@
         }
         return view.stopRecord();
       },
-      openSystemAlbum(mediaUri : string = '') : string {
+      openSystemAlbum(mediaUri : string) : string {
         const view = this.requireCameraView();
         if (view == null) {
           return nativeViewUnavailable();
@@ -260,7 +260,7 @@
       });
       view.setMode(this.mode);
       view.setTargetFps(this.targetFps.toInt());
-      view.setCameraSoundEnabled(this.cameraSoundEnabled);
+      view.setCameraSoundEnabled(this.soundEnabled);
       view.setStatus(this.statusText);
       this.cameraView = view;
       this.cameraViewLoaded = true;
@@ -328,10 +328,6 @@
         data: {}
       };
     }
-  }
-
-  function encode(value : any) : string {
-    return JSON.stringify(value ?? {}) ?? '{}';
   }
 </script>
 

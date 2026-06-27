@@ -8,7 +8,8 @@
         "xyc-markvideo",
         "uts",
         "camera",
-        "android"
+        "android",
+        "ios"
     ],
 	"repository": "",
 	"engines": {
@@ -32,7 +33,7 @@
 		"declaration": {
 			"ads": "无",
 			"data": "插件不采集任何数据",
-			"permissions": "Android 使用相机、麦克风权限，用于原生预览、拍照和 30fps 录像；Android 9 及以下使用写入相册权限保存媒体。"
+			"permissions": "Android 和 iOS 使用相机、麦克风权限，用于原生预览、拍照和录像；Android 9 及以下使用写入相册权限保存媒体，iOS 使用相册添加权限保存媒体。"
 		},
 		"npmurl": "",
 		"darkmode": "-",
@@ -55,7 +56,7 @@
 				},
 				"App": {
 					"app-android": "y",
-					"app-ios": "-",
+					"app-ios": "y",
 					"app-harmony": "-"
 				},
 				"uni-app": {
@@ -98,7 +99,7 @@
 					},
 					"app": {
 						"android": "y",
-						"ios": "-",
+						"ios": "y",
 						"harmony": "-"
 					},
 					"mp": {

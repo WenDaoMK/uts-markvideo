@@ -7,7 +7,7 @@
       :style="cameraViewportStyleText"
       :mode="mode"
       :target-fps="targetFps"
-      :camera-sound-enabled="cameraSoundEnabled"
+      :sound-enabled="cameraSoundEnabled"
       :status-text="nativePreviewStatusText"
       @nativeviewready="handleNativeReady"
       @cameraready="handleCameraReady"
@@ -158,17 +158,17 @@
       </view>
     </view>
 
-    <view class="topBar">
-      <view class="topSide">
+    <view class="topBar" :style="topBarStyle">
+      <view class="topSide" :style="topContentStyle">
         <view class="backButton" @click="goBack">
           <text class="backIcon">‹</text>
         </view>
       </view>
-      <view class="topTitleBox">
+      <view class="topTitleBox" :style="topContentStyle">
         <text class="topTitle">{{ mode === 'video' ? '视频' : '照片' }}</text>
         <text class="topSub">{{ nativeStatus }}</text>
       </view>
-      <view class="topRightSide">
+      <view class="topRightSide" :style="topContentStyle">
         <view class="flashTapArea" @click="cycleFlashMode">
           <view :class="flashPillClass">
             <text :class="flashIconClass">⚡︎</text>
@@ -185,7 +185,7 @@
       </view>
     </view>
 
-    <view class="recordHud" v-if="isRecording">
+    <view class="recordHud" :style="recordHudStyle" v-if="isRecording">
       <view class="recordBubble">
         <view :class="recordDotClass"></view>
         <text class="recordHudText">{{ recordElapsedText }}</text>
@@ -277,7 +277,6 @@
 </template>
 
 <script lang="uts">
-import { XycMarkvideoElement } from 'uts.sdk.modules.xycMarkvideo'
 
 const WATERMARK_STORAGE_KEY = 'xyc-camera-watermark-template'
 const WATERMARK_HANDLE_PAD = 30
@@ -296,7 +295,10 @@ const WATERMARK_TRACE_LOG = false
 const RECORD_STOP_TIMEOUT_MS = 12000
 const PORTRAIT_LAYOUT_FALLBACK_WIDTH = 375
 const PORTRAIT_LAYOUT_FALLBACK_HEIGHT = 812
-const CAMERA_TOP_BAR_HEIGHT = 96
+const CAMERA_TOP_BAR_BASE_HEIGHT = 72
+const CAMERA_TOP_CONTENT_OFFSET = 18
+const CAMERA_TOP_MIN_SAFE_AREA = 24
+const CAMERA_TOP_SAFE_AREA_PULLBACK = 10
 const CAMERA_MODE_SWITCH_HEIGHT = 36
 const CAMERA_MAIN_CONTROLS_HEIGHT = 88
 const CAMERA_CONTROLS_MIN_VISIBLE_HEIGHT = 80
@@ -384,7 +386,8 @@ type WatermarkDragGesture = {
 
 type ScreenBounds = {
   width: number,
-  height: number
+  height: number,
+  safeAreaTop: number
 }
 
 type CameraViewportBounds = {
@@ -514,7 +517,7 @@ type WatermarkPinchGesture = {
 export default {
   data() {
     const screen = resolveScreenBounds()
-    const viewport = resolveCameraViewportBounds(screen.width, screen.height)
+    const viewport = resolveCameraViewportBounds(screen.width, screen.height, screen.safeAreaTop)
     return {
       mode: 'photo',
       targetFps: 30,
@@ -523,6 +526,7 @@ export default {
       flashPending: false,
       flashCycleMode: 'off',
       flashLastRequestedMode: 'off',
+      availableFlashModes: ['off', 'on', 'auto'] as Array<string>,
       flashRequestSilent: false,
       flashEventHandled: false,
       flashEventApplied: true,
@@ -585,7 +589,8 @@ export default {
         y: 0
       } as WatermarkPoint,
       screenWidth: screen.width as number,
-      previewHeight: screen.height as number
+      previewHeight: screen.height as number,
+      safeAreaTop: screen.safeAreaTop as number
     }
   },
   computed: {
@@ -709,6 +714,21 @@ export default {
     cameraViewportStyleText() {
       const viewport = this.cameraViewportBounds()
       return 'position:absolute;left:' + Math.round(viewport.left) + 'px;top:' + Math.round(viewport.top) + 'px;width:' + Math.round(viewport.width) + 'px;height:' + Math.round(viewport.height) + 'px;'
+    },
+    topBarStyle() {
+      return {
+        height: Math.round(resolveCameraTopBarHeight(this.safeAreaTop as number)) + 'px'
+      }
+    },
+    topContentStyle() {
+      return {
+        top: Math.round(resolveCameraTopContentTop(this.safeAreaTop as number)) + 'px'
+      }
+    },
+    recordHudStyle() {
+      return {
+        top: Math.round(resolveCameraTopBarHeight(this.safeAreaTop as number) + 28) + 'px'
+      }
     },
     bottomPanelStyle() {
       const panel = this.cameraBottomPanelBounds()
@@ -1173,8 +1193,8 @@ export default {
     watermarkTemplateHasSubtitle(template: WatermarkTemplate): boolean {
       return template.subtitleText.length > 0
     },
-    resolveNativeCamera(): XycMarkvideoElement | null {
-      const nativeCamera = this.$refs['nativeCamera'] as XycMarkvideoElement | null
+    resolveNativeCamera(): any | null {
+      const nativeCamera = this.$refs['nativeCamera']
       return nativeCamera != null ? nativeCamera : null
     },
     eventDetail(payload: UTSJSONObject | null): UTSJSONObject {
@@ -1187,6 +1207,7 @@ export default {
       const cameraFacing = safeString(detail['cameraFacing'], '')
       const flashMode = safeString(detail['flashMode'], '')
       const zoomMode = safeString(detail['zoomMode'], '')
+      this.updateAvailableFlashModes(detail['supportedFlashModes'])
       this.updateAvailableZoomModes(detail['availableZoomModes'])
       if (hasText(cameraFacing)) {
         this.cameraFacing = cameraFacing
@@ -1410,6 +1431,7 @@ export default {
       const requestedFlashMode = safeString(detail['requestedFlashMode'], '')
       const message = safeString(detail['message'], '')
       const silent = this.flashRequestSilent
+      this.updateAvailableFlashModes(detail['supportedFlashModes'])
       this.flashEventHandled = true
       this.flashEventApplied = applied
       this.flashRequestSilent = false
@@ -1800,11 +1822,12 @@ export default {
         return true
       }
       const payload = await this.buildNativeWatermarkPayload()
+      const payloadText = JSON.stringify(payload)
       if (syncVersion !== this.watermarkSyncVersion || this.activeWatermark == null) {
         return true
       }
       try {
-        const result = await this.normalizeNativeCommandReturn(await nativeCamera.setWatermark(payload), '水印设置失败', '水印已更新', ['12', '14'])
+        const result = await this.normalizeNativeCommandReturn(await nativeCamera.setWatermark(payloadText != null ? payloadText : '{}'), '水印设置失败', '水印已更新', ['12', '14'])
         if (!result.success && showError) {
           this.nativeStatus = safeString(result.errorMessage, '水印设置失败')
         }
@@ -2405,12 +2428,12 @@ export default {
     cameraViewportBounds(): CameraViewportBounds {
       const screenWidth = this.screenWidth as number
       const previewHeight = this.previewHeight as number
-      return resolveCameraViewportBounds(screenWidth, previewHeight)
+      return resolveCameraViewportBounds(screenWidth, previewHeight, this.safeAreaTop as number)
     },
     cameraBottomPanelBounds(): CameraPanelBounds {
       const screenWidth = this.screenWidth as number
       const previewHeight = this.previewHeight as number
-      return resolveCameraBottomPanelBounds(screenWidth, previewHeight)
+      return resolveCameraBottomPanelBounds(screenWidth, previewHeight, this.safeAreaTop as number)
     },
     watermarkEditBounds(): CameraViewportBounds {
       return this.cameraViewportBounds()
@@ -2766,7 +2789,29 @@ export default {
     },
     nextFlashMode(currentFlashMode: string): string {
       const normalizedMode = this.normalizeFlashModeForCycle(currentFlashMode, 'off')
-      return normalizedMode == 'off' ? 'on' : (normalizedMode == 'on' ? 'auto' : 'off')
+      const modes = normalizeAvailableFlashModes(this.availableFlashModes)
+      let currentIndex = -1
+      for (let i = 0; i < modes.length; i += 1) {
+        if (modes[i] == normalizedMode) {
+          currentIndex = i
+          break
+        }
+      }
+      const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % modes.length : 0
+      return modes[nextIndex]
+    },
+    updateAvailableFlashModes(value: any | null): void {
+      const modes = normalizeAvailableFlashModes(value)
+      this.availableFlashModes = modes
+      if (!stringArrayContains(modes, this.flashMode)) {
+        this.flashMode = 'off'
+      }
+      if (!stringArrayContains(modes, this.flashCycleMode)) {
+        this.flashCycleMode = this.flashMode
+      }
+      if (!stringArrayContains(modes, this.flashLastRequestedMode)) {
+        this.flashLastRequestedMode = this.flashMode
+      }
     },
     flashModeLabel(mode: string): string {
       if (mode == 'on') {
@@ -3172,9 +3217,11 @@ export default {
       const screen = resolveScreenBounds()
       const nextWidth = screen.width as number
       const nextHeight = screen.height as number
-      if (nextWidth != this.screenWidth || nextHeight != this.previewHeight) {
+      const nextSafeAreaTop = screen.safeAreaTop as number
+      if (nextWidth != this.screenWidth || nextHeight != this.previewHeight || nextSafeAreaTop != this.safeAreaTop) {
         this.screenWidth = nextWidth
         this.previewHeight = nextHeight
+        this.safeAreaTop = nextSafeAreaTop
       }
     },
     async prepareRecordPermissions(): Promise<boolean> {
@@ -3194,13 +3241,14 @@ export default {
       }
       return false
     },
-    async startRecordWithReadyPermissions(nativeCamera: XycMarkvideoElement): Promise<void> {
+    async startRecordWithReadyPermissions(nativeCamera: any): Promise<void> {
       if (this.activeWatermark != null && !await this.flushWatermarkSync(true)) {
         return
       }
       this.recordStartPending = true
       this.startRecordPendingTimeout()
-      const recordResponse = await nativeCamera.startRecord({ fps: this.targetFps })
+      const optionsText = JSON.stringify({ fps: this.targetFps })
+      const recordResponse = await nativeCamera.startRecord(optionsText != null ? optionsText : '{}')
       const result = await this.normalizeNativeCommandReturn(recordResponse, '录像开始失败', '录像启动中', ['10', '11', '14'])
       if (result.success) {
         if (!this.isRecording && !this.nativeReturnIsEmpty(recordResponse)) {
@@ -3237,39 +3285,56 @@ function resolveScreenBounds(): ScreenBounds {
     const info = uni.getSystemInfoSync()
     const windowHeight = safeNumber(info.windowHeight, PORTRAIT_LAYOUT_FALLBACK_HEIGHT)
     const safeArea = info.safeArea
-    const safeAreaBottom = safeArea != null ? safeNumber(safeArea.bottom, windowHeight) : windowHeight
-    const usableHeight = Math.min(windowHeight, safeAreaBottom)
+    const statusBarHeight = safeNumber(info.statusBarHeight, 0)
+    const safeAreaTop = safeArea != null ? safeNumber(safeArea.top, statusBarHeight) : statusBarHeight
     const bounds = normalizePortraitLayoutBounds(
       safeNumber(info.windowWidth, PORTRAIT_LAYOUT_FALLBACK_WIDTH),
-      Math.max(1, usableHeight)
+      Math.max(1, windowHeight),
+      Math.max(0, safeAreaTop)
     )
     return bounds
   } catch (_) {
     return {
       width: PORTRAIT_LAYOUT_FALLBACK_WIDTH,
-      height: PORTRAIT_LAYOUT_FALLBACK_HEIGHT
+      height: PORTRAIT_LAYOUT_FALLBACK_HEIGHT,
+      safeAreaTop: CAMERA_TOP_MIN_SAFE_AREA
     }
   }
 }
 
-function normalizePortraitLayoutBounds(width: number, height: number): ScreenBounds {
+function normalizePortraitLayoutBounds(width: number, height: number, safeAreaTop: number): ScreenBounds {
   const safeWidth = Math.max(1, safeNumber(width, PORTRAIT_LAYOUT_FALLBACK_WIDTH))
   const safeHeight = Math.max(1, safeNumber(height, PORTRAIT_LAYOUT_FALLBACK_HEIGHT))
   return {
     width: Math.min(safeWidth, safeHeight),
-    height: Math.max(safeWidth, safeHeight)
+    height: Math.max(safeWidth, safeHeight),
+    safeAreaTop: Math.max(0, safeNumber(safeAreaTop, CAMERA_TOP_MIN_SAFE_AREA))
   }
 }
 
-function resolveCameraViewportBounds(width: number, height: number): CameraViewportBounds {
+function resolveCameraTopBarHeight(safeAreaTop: number): number {
+  return CAMERA_TOP_BAR_BASE_HEIGHT + resolveCameraTopSafeOffset(safeAreaTop)
+}
+
+function resolveCameraTopContentTop(safeAreaTop: number): number {
+  return CAMERA_TOP_CONTENT_OFFSET + resolveCameraTopSafeOffset(safeAreaTop)
+}
+
+function resolveCameraTopSafeOffset(safeAreaTop: number): number {
+  const pulledBackTop = safeNumber(safeAreaTop, CAMERA_TOP_MIN_SAFE_AREA) - CAMERA_TOP_SAFE_AREA_PULLBACK
+  return Math.max(CAMERA_TOP_MIN_SAFE_AREA, pulledBackTop)
+}
+
+function resolveCameraViewportBounds(width: number, height: number, safeAreaTop: number): CameraViewportBounds {
   const safeWidth = Math.max(1, safeNumber(width, PORTRAIT_LAYOUT_FALLBACK_WIDTH))
   const safeHeight = Math.max(1, safeNumber(height, PORTRAIT_LAYOUT_FALLBACK_HEIGHT))
+  const topBarHeight = resolveCameraTopBarHeight(safeAreaTop)
   const fullTargetHeight = safeWidth * CAMERA_VIEWPORT_ASPECT_HEIGHT / CAMERA_VIEWPORT_ASPECT_WIDTH
-  const maxTargetHeight = Math.max(1, safeHeight - CAMERA_TOP_BAR_HEIGHT - CAMERA_CONTROLS_MIN_VISIBLE_HEIGHT)
+  const maxTargetHeight = Math.max(1, safeHeight - topBarHeight - CAMERA_CONTROLS_MIN_VISIBLE_HEIGHT)
   const targetHeight = Math.min(fullTargetHeight, maxTargetHeight)
   const targetWidth = targetHeight * CAMERA_VIEWPORT_ASPECT_WIDTH / CAMERA_VIEWPORT_ASPECT_HEIGHT
   const left = (safeWidth - targetWidth) / 2
-  const top = CAMERA_TOP_BAR_HEIGHT
+  const top = topBarHeight
   return {
     left,
     top,
@@ -3280,10 +3345,10 @@ function resolveCameraViewportBounds(width: number, height: number): CameraViewp
   }
 }
 
-function resolveCameraBottomPanelBounds(width: number, height: number): CameraPanelBounds {
+function resolveCameraBottomPanelBounds(width: number, height: number, safeAreaTop: number): CameraPanelBounds {
   const safeWidth = Math.max(1, safeNumber(width, PORTRAIT_LAYOUT_FALLBACK_WIDTH))
   const safeHeight = Math.max(1, safeNumber(height, PORTRAIT_LAYOUT_FALLBACK_HEIGHT))
-  const viewport = resolveCameraViewportBounds(safeWidth, safeHeight)
+  const viewport = resolveCameraViewportBounds(safeWidth, safeHeight, safeAreaTop)
   const top = viewport.bottom
   const bottom = Math.max(top + 1, safeHeight)
   return {
@@ -3546,6 +3611,22 @@ function firstNonEmptyString(values: Array<any | null>): string {
 
 function safeArray(value: any | null): Array<any> {
   return Array.isArray(value) ? value : []
+}
+
+function normalizeAvailableFlashModes(value: any | null): Array<string> {
+  const rawModes = safeArray(value)
+  const modes: Array<string> = ['off']
+  for (let i = 0; i < rawModes.length; i += 1) {
+    const mode = safeString(rawModes[i], '')
+    if ((mode == 'on' || mode == 'auto') && !stringArrayContains(modes, mode)) {
+      modes.push(mode)
+    }
+  }
+  if (modes.length == 1 && rawModes.length <= 0) {
+    modes.push('on')
+    modes.push('auto')
+  }
+  return modes
 }
 
 function normalizeAvailableZoomModes(value: any | null): Array<string> {
@@ -3878,7 +3959,6 @@ function roundWatermarkPx(value: number): number {
   right: 0;
   top: 0;
   height: 96px;
-  padding-top: 23px;
   padding-left: 14px;
   padding-right: 14px;
   flex-direction: row;

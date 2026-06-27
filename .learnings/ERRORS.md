@@ -4,6 +4,45 @@ Command failures and integration errors.
 
 ---
 
+## [ERR-20260627-001] ios_real_device_screenshot_tooling
+
+**Logged**: 2026-06-27T10:48:55+08:00
+**Priority**: medium
+**Status**: pending
+**Area**: ios
+
+### Summary
+HBuilderX can sync and launch the uni-app x iOS debug base on the real device, but automated screenshot capture is blocked by the iOS developer-service/RSD tooling chain.
+
+### Error
+```text
+pymobiledevice3 developer screenshot:
+Unable to connect to Tunneld. You can start one using:
+sudo python3 -m pymobiledevice3 remote tunneld
+
+pymobiledevice3 developer screenshot --userspace:
+Failed to start service ... If your device iOS version >= 17.0: Make sure you passed the --rsd option.
+
+pymobiledevice3 mounter auto-mount:
+GithubRateLimitExceededError: GitHub API: rate limit exceeded.
+```
+
+### Context
+- Operation: iOS real-device layout acceptance after fixing the cameraX safe-area header on device `00008130-000C1C392260001C`.
+- HBuilderX CLI successfully compiled, synced, and launched the project on the device.
+- `xcrun devicectl device info displays` and `device info processes` worked, and `UniAppX` was running.
+- `xcrun devicectl` in the installed Xcode version does not expose a direct screenshot subcommand.
+- `pymobiledevice3 remote start-tunnel` without userspace requires root, while the userspace screenshot path still needs a working RSD/developer image chain.
+
+### Suggested Fix
+For future automated visual acceptance, prefer a preconfigured iOS screenshot route: start `pymobiledevice3 remote tunneld` with appropriate privileges, or provide an RSD host/port from `remote start-tunnel`, and make sure the personalized DeveloperDiskImage is available locally before running `developer screenshot`. Until then, rely on HBuilderX sync logs plus manual phone inspection for visual layout checks.
+
+### Metadata
+- Reproducible: yes
+- Related Files: pages/cameraX/index.uvue
+
+---
+
 ## [ERR-20260625-005] subagent_provider_403
 
 **Logged**: 2026-06-25T15:05:00+08:00
@@ -1079,5 +1118,198 @@ Use the bundled Codex Node executable from `load_workspace_dependencies` for rep
 - **Resolved**: 2026-06-26T00:42:19+08:00
 - **Commit/PR**: pending
 - **Notes**: Switched to `/Users/chaixixi/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node` for verification.
+
+---
+
+## [ERR-20260626-003] ios_swift_typecheck_sdk_target
+
+**Logged**: 2026-06-26T16:38:45+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: ios
+
+### Summary
+Plain `swiftc -typecheck` is not reliable for this iOS UTS Swift file in the current shell because the default target lacks UIKit/iOS standard library setup.
+
+### Error
+```text
+error: no such module 'UIKit'
+error: unable to load standard library for target 'arm64-apple-macosx26.0'
+```
+
+### Context
+- Operation: local Swift verification for `uni_modules/xyc-markvideo/utssdk/app-ios/MarkVideoEmbeddedCameraView.swift`
+- Commands attempted:
+  - `swiftc -typecheck .../MarkVideoEmbeddedCameraView.swift`
+  - `xcrun --sdk iphonesimulator swiftc -typecheck .../MarkVideoEmbeddedCameraView.swift`
+- `swiftc -parse .../MarkVideoEmbeddedCameraView.swift` succeeded, but parse-only verification did not catch later iOS SDK typecheck errors.
+
+### Suggested Fix
+Use `swiftc -parse` only for fast syntax checks. For commit-level verification on macOS with Xcode/iOS SDK, run `xcrun --sdk iphoneos swiftc -target arm64-apple-ios15.0 -parse-as-library -typecheck .../MarkVideoEmbeddedCameraView.swift`; full runtime validation still needs HBuilderX/DCloud iOS build or a real iOS target.
+
+### Metadata
+- Reproducible: yes
+- Related Files: uni_modules/xyc-markvideo/utssdk/app-ios/MarkVideoEmbeddedCameraView.swift
+
+### Resolution
+- **Resolved**: 2026-06-26T17:23:02+08:00
+- **Commit/PR**: pending
+- **Notes**: Added an iOS SDK-backed Swift typecheck to the Node structure suite when the iOS SDK is available, and verified `npm test`, direct `xcrun --sdk iphoneos swiftc ... -typecheck`, and `git diff --check`.
+
+---
+
+## [ERR-20260626-004] context7_dcloud_docs_fetch_failed
+
+**Logged**: 2026-06-26T17:23:02+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: docs
+
+### Summary
+Context7 failed while querying current DCloud uni-app x documentation, so that lookup cannot be used as evidence for this change.
+
+### Error
+```text
+Error fetching library context. Please try again later. TypeError: fetch failed
+```
+
+### Context
+- Operation: query DCloud uni-app x docs for UTS standard component iOS native view integration details.
+- Tool: Context7 `query_docs` with library `/websites/doc_dcloud_net_cn_uni-app-x`.
+- Result: fetch failed before returning usable documentation snippets.
+
+### Suggested Fix
+When Context7 fails, rely on project-local contracts and existing platform bridge patterns, then retry Context7 or open official DCloud docs before making claims about newly introduced framework rules.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: uni_modules/xyc-markvideo/utssdk/app-ios/index.vue, uni_modules/xyc-markvideo/utssdk/app-ios/MarkVideoEmbeddedCameraView.swift
+
+### Resolution
+- **Resolved**: 2026-06-26T17:23:02+08:00
+- **Commit/PR**: pending
+- **Notes**: Did not use the failed Context7 lookup as evidence; validated against local Android/iOS bridge contracts, tests, and iOS Swift typecheck instead.
+
+---
+
+## [ERR-20260626-005] hbuilderx_ios_uts_component_compile
+
+**Logged**: 2026-06-26T17:51:52+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: ios
+
+### Summary
+HBuilderX iOS build failed because the page imported the generated UTS module before it was available and the iOS component prop generated an Objective-C selector that conflicted with an exposed method.
+
+### Error
+```text
+[plugin:uts] Could not resolve "uts.sdk.modules.xycMarkvideo"
+pages/cameraX/index.uvue:1:0
+uni_modules/xyc-markvideo/utssdk/app-ios/src/index.swift:556:14: error: type 'XycMarkvideoElementImpl' does not conform to protocol 'XycMarkvideoElement'
+uni_modules/xyc-markvideo/utssdk/app-ios/src/index.swift:390:17: error: method 'setCameraSoundEnabled' with Objective-C selector 'setCameraSoundEnabled:' conflicts with setter for 'cameraSoundEnabled' with the same Objective-C selector
+```
+
+### Context
+- Operation: HBuilderX compile for `uts-markvideo` with compiler 5.07 (uni-app x).
+- Page directly imported `XycMarkvideoElement` from `uts.sdk.modules.xycMarkvideo`.
+- iOS bridge had both prop `cameraSoundEnabled` and exposed method `setCameraSoundEnabled(enabled)`.
+
+### Suggested Fix
+Keep `pages/cameraX/index.uvue` independent from generated `uts.sdk.modules.*` imports without casting `$refs` to page-local structural types; use the ref dynamically and guard method contracts with tests. Avoid iOS UTS prop names whose generated setters collide with exposed methods. Use `soundEnabled` for the initial prop and keep `setCameraSoundEnabled(enabled)` as the stable command method.
+
+### Metadata
+- Reproducible: yes
+- Related Files: pages/cameraX/index.uvue, uni_modules/xyc-markvideo/utssdk/app-ios/index.vue, uni_modules/xyc-markvideo/utssdk/app-android/index.vue, test/structure.test.mjs
+
+### Resolution
+- **Resolved**: 2026-06-26T21:41:02+08:00
+- **Commit/PR**: pending
+- **Notes**: Removed the generated module import from the camera page, avoided page-local `$refs` casts, renamed the bridge prop to `soundEnabled` on both platforms, kept the exposed method name unchanged, removed iOS bridge default args that confused generated protocol signatures, and guarded the `targetFps` watcher so generated Swift unwraps `NSNumber?` before passing it to `setTargetFps(_:)`. Verified with `npm test`, direct iOS Swift typecheck, `git diff --check`, and HBuilderX compile-only for App iOS, which reported `项目 uts-markvideo UTS编译完毕` and `ready in 41380ms`.
+
+---
+
+## [ERR-20260626-006] hbuilderx_ios_device_acceptance_attach
+
+**Logged**: 2026-06-26T22:16:59+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: ios
+
+### Summary
+iOS real-device run can compile, but HBuilderX 5.07 currently fails before reliable project sync/launch because the uni-app x standard debug base plist/signing/install chain is inconsistent.
+
+### Error
+```text
+HBuilderX log:
+getPlistInfo Error: Invalid binary plist. Expected 'bplist' at offset 0.
+getPackageNameByPlist Error: Invalid binary plist. Expected 'bplist' at offset 0.
+initCustomBaseAppInfo Error: Invalid binary plist. Expected 'bplist' at offset 0.
+ERROR: Install failed. Got error "ApplicationVerificationFailed" with code 0xe8008001:
+Failed to verify code signature ... Payload/HBuilder.app
+
+Local checks:
+Payload/HBuilder.app/Info.plist starts with XML "<?xml version=\"1" instead of "bplist".
+codesign --verify --strict reports "invalid signature (code or signature have been modified)".
+The provisioning profile contains the device UDID but has Entitlements.get-task-allow=false.
+```
+
+### Context
+- Operation: iOS real-device acceptance for `uts-markvideo` on iPhone `00008130-000C1C392260001C`, iOS 26.5.
+- HBuilderX 5.07 CLI command used `launch app-ios --iosTarget device` with the matching `.p12` and `.mobileprovision` from Downloads.
+- The app bundle id `app.brussels8834.snow8627` is installed on the device and `ios-deploy --exists` returns `true`, but that only proves the already-installed debug base can open. It does not prove the newly generated update IPA is valid.
+- Xcode `xcdevice list` reports the device as available over USB.
+- The HBuilderX-generated signed uni-app x base at `/Applications/HBuilderX.app/Contents/HBuilderX/plugins/uniappx-launcher/base/iPhone_base_signed.ipa` contained an XML `Payload/UniAppX.app/Info.plist`, while the original `iPhone_base.ipa` used binary plist format.
+- Converting the signed base IPA and project debug IPA `unpackage/debug/iOS_debug_5.07.ipa` app `Info.plist` files to binary plist made HBuilderX CLI run through compile, install, sync, and launch.
+- The successful rerun printed `项目 uts-markvideo UTS编译完毕`, `安装uni-app x调试基座成功`, `同步手机端程序文件成功`, and `项目 [uts-markvideo] 已启动`.
+- A later rerun without `--cleanCache true` skipped base update because the phone base version matched local `5.07.12649`, then synced and launched the project again.
+- Automated visual acceptance is still limited because HBuilderX `screencap app-ios` reported no connected platform device even after launch; use manual phone checks or another iOS screenshot path for media-function acceptance.
+
+### Suggested Fix
+Do not treat manual opening of the installed HBuilder app as proof that the latest project synced. If HBuilderX 5.07 reports `Invalid binary plist` after re-signing the uni-app x iOS standard base, run `node scripts/fix-hbuilderx-ios-base-plist.mjs`, then rerun iOS launch without `--cleanCache true`. If a clean cache or base update regenerates the signed IPA, rerun the script before the next launch.
+
+### Metadata
+- Reproducible: yes
+- Related Files: README.md, scripts/fix-hbuilderx-ios-base-plist.mjs, manifest.json, uni_modules/xyc-markvideo/utssdk/app-ios/MarkVideoEmbeddedCameraView.swift
+
+### Resolution
+- **Resolved**: 2026-06-27T01:16:00+08:00
+- **Commit/PR**: pending
+- **Notes**: Added a repeatable binary-plist repair script for the generated HBuilderX uni-app x iOS base/debug IPAs and documented the rerun workflow. This resolves the HBuilderX sync/launch blocker; final camera media acceptance still needs true-device visual/manual confirmation.
+
+---
+
+## [ERR-20260627-002] ios_uts_dynamic_object_argument
+
+**Logged**: 2026-06-27T11:30:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: ios
+
+### Summary
+iOS watermarked photo capture failed with `argument does not match object` because page code passed dynamic objects across the UTS component method boundary.
+
+### Error
+```text
+argument does not match object
+```
+
+### Context
+- User reported the error when watermark was enabled and tapping photo.
+- The page called `nativeCamera.setWatermark(payload)` before `takePhoto()`.
+- Android tolerated `any` object arguments, but iOS UTS component bridge can reject dynamic objects before Swift receives them.
+- Swift and Kotlin native layers already use JSON string payloads for watermark and record options.
+
+### Suggested Fix
+Keep cross-platform UTS component commands stable by passing JSON strings across the page-to-component boundary for dynamic payloads. Page code should `JSON.stringify(...)`; Android and iOS bridge methods should accept `string` and pass it directly to native code.
+
+### Metadata
+- Reproducible: yes
+- Related Files: pages/cameraX/index.uvue, uni_modules/xyc-markvideo/utssdk/app-ios/index.vue, uni_modules/xyc-markvideo/utssdk/app-android/index.vue, test/structure.test.mjs
+
+### Resolution
+- **Resolved**: 2026-06-27T11:30:00+08:00
+- **Commit/PR**: pending
+- **Notes**: Changed `setWatermark` and `startRecord` to use JSON string payloads across both Android and iOS bridges. Verified with structure tests, full Node tests, iOS Swift typecheck, and HBuilderX iOS device sync/launch.
 
 ---
