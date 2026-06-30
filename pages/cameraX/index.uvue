@@ -277,7 +277,9 @@
 </template>
 
 <script lang="uts">
-import { ComponentPublicInstance } from 'vue'
+// #ifdef APP-ANDROID
+import { XycMarkvideoElement } from 'uts.sdk.modules.xycMarkvideo'
+// #endif
 
 const WATERMARK_STORAGE_KEY = 'xyc-camera-watermark-template'
 const WATERMARK_HANDLE_PAD = 30
@@ -3614,16 +3616,120 @@ function callNativeCameraMethod(nativeCamera: any | null, methodName: string): a
   if (nativeCamera == null) {
     return null
   }
-  const component = nativeCamera as ComponentPublicInstance
-  return component.$callMethod(methodName)
+  // #ifdef APP-ANDROID
+  const component = nativeCamera as XycMarkvideoElement
+  if (methodName == 'clearWatermark') {
+    return component.clearWatermark()
+  }
+  if (methodName == 'switchCamera') {
+    return component.switchCamera()
+  }
+  if (methodName == 'takePhoto') {
+    return component.takePhoto()
+  }
+  if (methodName == 'stopRecord') {
+    return component.stopRecord()
+  }
+  if (methodName == 'preparePermissions') {
+    return component.preparePermissions()
+  }
+  if (methodName == 'checkRecordPermissions') {
+    return component.checkRecordPermissions()
+  }
+  if (methodName == 'prepareRecordPermissions') {
+    return component.prepareRecordPermissions()
+  }
+  if (methodName == 'restartCamera') {
+    return component.restartCamera()
+  }
+  // #endif
+
+  // #ifndef APP-ANDROID
+  const component = nativeCamera
+  if (methodName == 'clearWatermark') {
+    return component.clearWatermark()
+  }
+  if (methodName == 'switchCamera') {
+    return component.switchCamera()
+  }
+  if (methodName == 'takePhoto') {
+    return component.takePhoto()
+  }
+  if (methodName == 'stopRecord') {
+    return component.stopRecord()
+  }
+  if (methodName == 'preparePermissions') {
+    return component.preparePermissions()
+  }
+  if (methodName == 'checkRecordPermissions') {
+    return component.checkRecordPermissions()
+  }
+  if (methodName == 'prepareRecordPermissions') {
+    return component.prepareRecordPermissions()
+  }
+  if (methodName == 'restartCamera') {
+    return component.restartCamera()
+  }
+  // #endif
+
+  return null
 }
 
 function callNativeCameraMethodWithArg(nativeCamera: any | null, methodName: string, arg: any | null): any | null {
   if (nativeCamera == null) {
     return null
   }
-  const component = nativeCamera as ComponentPublicInstance
-  return component.$callMethod(methodName, arg)
+  // #ifdef APP-ANDROID
+  const component = nativeCamera as XycMarkvideoElement
+  if (methodName == 'performHapticFeedback') {
+    return component.performHapticFeedback(arg as string)
+  }
+  if (methodName == 'openSystemAlbum') {
+    return component.openSystemAlbum(arg as string)
+  }
+  if (methodName == 'setWatermark') {
+    return component.setWatermark(arg as string)
+  }
+  if (methodName == 'setCameraSoundEnabled') {
+    return component.setCameraSoundEnabled(arg as boolean)
+  }
+  if (methodName == 'setFlashMode') {
+    return component.setFlashMode(arg as string)
+  }
+  if (methodName == 'setZoomMode') {
+    return component.setZoomMode(arg as string)
+  }
+  if (methodName == 'startRecord') {
+    return component.startRecord(arg as string)
+  }
+  // #endif
+
+  // #ifndef APP-ANDROID
+  const component = nativeCamera
+  if (methodName == 'performHapticFeedback') {
+    return component.performHapticFeedback(arg)
+  }
+  if (methodName == 'openSystemAlbum') {
+    return component.openSystemAlbum(arg)
+  }
+  if (methodName == 'setWatermark') {
+    return component.setWatermark(arg)
+  }
+  if (methodName == 'setCameraSoundEnabled') {
+    return component.setCameraSoundEnabled(arg)
+  }
+  if (methodName == 'setFlashMode') {
+    return component.setFlashMode(arg)
+  }
+  if (methodName == 'setZoomMode') {
+    return component.setZoomMode(arg)
+  }
+  if (methodName == 'startRecord') {
+    return component.startRecord(arg)
+  }
+  // #endif
+
+  return null
 }
 
 function safeArray(value: any | null): Array<any> {

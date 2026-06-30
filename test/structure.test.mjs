@@ -694,13 +694,12 @@ test('uvue runtime value boundaries avoid Android ClassCastException regressions
   assert.match(cameraPage, /handleZoomChange\(event: UTSJSONObject \| null\)/);
   assert.match(cameraPage, /handleCameraChange\(event: UTSJSONObject \| null\)/);
 
-  assert.doesNotMatch(cameraPage, /from 'uts\.sdk\.modules\.xycMarkvideo'/);
+  assert.match(cameraPage, /\/\/ #ifdef APP-ANDROID\s*import \{ XycMarkvideoElement \} from 'uts\.sdk\.modules\.xycMarkvideo'\s*\/\/ #endif/);
   assert.doesNotMatch(cameraPage, /type XycMarkvideoElement = \{/);
   assert.match(cameraPage, /resolveNativeCamera\(\): any \| null \{[\s\S]*const nativeCamera = this\.\$refs\['nativeCamera'\][\s\S]*return nativeCamera != null \? nativeCamera : null/);
   assert.doesNotMatch(cameraPage, /\$refs\['nativeCamera'\] as /);
-  assert.match(cameraPage, /import \{ ComponentPublicInstance \} from 'vue'/);
-  assert.match(cameraPage, /const component = nativeCamera as ComponentPublicInstance[\s\S]*component\.\$callMethod\(methodName/);
-  assert.doesNotMatch(cameraPage, /as XycMarkvideoElement/);
+  assert.doesNotMatch(cameraPage, /ComponentPublicInstance|\$callMethod/);
+  assert.match(cameraPage, /const component = nativeCamera as XycMarkvideoElement/);
   assert.doesNotMatch(cameraPage, /as NativeCameraRef/);
 
   assert.notEqual(touchPairBody, '', 'watermarkTouchPair body should be inspectable');
@@ -830,13 +829,12 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.doesNotMatch(page, /@modechange/);
   assert.doesNotMatch(page, /handleNativeShutter/);
   assert.doesNotMatch(page, /handleNativeMode/);
-  assert.doesNotMatch(page, /from 'uts\.sdk\.modules\.xycMarkvideo'/);
+  assert.match(page, /\/\/ #ifdef APP-ANDROID\s*import \{ XycMarkvideoElement \} from 'uts\.sdk\.modules\.xycMarkvideo'\s*\/\/ #endif/);
   assert.doesNotMatch(page, /type XycMarkvideoElement = \{/);
   assert.match(page, /resolveNativeCamera\(\): any \| null \{[\s\S]*const nativeCamera = this\.\$refs\['nativeCamera'\][\s\S]*return nativeCamera != null \? nativeCamera : null/);
   assert.doesNotMatch(page, /\$refs\['nativeCamera'\] as /);
-  assert.match(page, /import \{ ComponentPublicInstance \} from 'vue'/);
-  assert.match(page, /const component = nativeCamera as ComponentPublicInstance[\s\S]*component\.\$callMethod\(methodName/);
-  assert.doesNotMatch(page, /as XycMarkvideoElement/);
+  assert.doesNotMatch(page, /ComponentPublicInstance|\$callMethod/);
+  assert.match(page, /const component = nativeCamera as XycMarkvideoElement/);
   assert.doesNotMatch(page, /as NativeCameraRef/);
   assert.match(page, /storedWatermarkTemplate\(stored\)/);
   assert.match(page, /storageValueToJSONObject\(value(?:: any \| null)?\)/);
@@ -966,8 +964,9 @@ test('cameraX uvue page owns UI and calls xyc-markvideo native camera methods', 
   assert.match(page, /syncWatermarkToNative/);
   assert.match(page, /callNativeCameraMethodWithArg\(nativeCamera, 'setWatermark', payloadText != null \? payloadText : '\{\}'\)/);
   assert.match(page, /callNativeCameraMethod\(nativeCamera, 'clearWatermark'\)/);
-  assert.match(page, /function callNativeCameraMethod\(nativeCamera(?:: any \| null)?, methodName(?:: string)?\)(?:: any \| null)? \{[\s\S]*const component = nativeCamera as ComponentPublicInstance[\s\S]*component\.\$callMethod\(methodName\)/);
-  assert.match(page, /function callNativeCameraMethodWithArg\(nativeCamera(?:: any \| null)?, methodName(?:: string)?, arg(?:: any \| null)?\)(?:: any \| null)? \{[\s\S]*const component = nativeCamera as ComponentPublicInstance[\s\S]*component\.\$callMethod\(methodName, arg\)/);
+  assert.match(page, /function callNativeCameraMethod\(nativeCamera(?:: any \| null)?, methodName(?:: string)?\)(?:: any \| null)? \{[\s\S]*\/\/ #ifdef APP-ANDROID[\s\S]*const component = nativeCamera as XycMarkvideoElement[\s\S]*component\.clearWatermark\(\)[\s\S]*component\.switchCamera\(\)[\s\S]*component\.takePhoto\(\)[\s\S]*component\.prepareRecordPermissions\(\)[\s\S]*\/\/ #endif/);
+  assert.match(page, /function callNativeCameraMethodWithArg\(nativeCamera(?:: any \| null)?, methodName(?:: string)?, arg(?:: any \| null)?\)(?:: any \| null)? \{[\s\S]*\/\/ #ifdef APP-ANDROID[\s\S]*const component = nativeCamera as XycMarkvideoElement[\s\S]*component\.performHapticFeedback\(arg as string\)[\s\S]*component\.openSystemAlbum\(arg as string\)[\s\S]*component\.setWatermark\(arg as string\)[\s\S]*component\.startRecord\(arg as string\)[\s\S]*\/\/ #endif/);
+  assert.doesNotMatch(page, /ComponentPublicInstance|\$callMethod/);
   assert.doesNotMatch(page, /nativeCamera\.(performHapticFeedback|openSystemAlbum|clearWatermark|setWatermark|setCameraSoundEnabled|setFlashMode|setZoomMode|switchCamera|takePhoto|stopRecord|preparePermissions|checkRecordPermissions|prepareRecordPermissions|startRecord|restartCamera)\(/);
   assert.match(page, /<view class="watermarkLayer" :style="watermarkLayerStyleValue\(\)" v-if="activeWatermark != null">/);
   assert.doesNotMatch(page, /<movable-area|<movable-view/);
