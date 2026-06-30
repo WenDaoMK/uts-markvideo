@@ -2240,7 +2240,7 @@ test('xyc-markvideo Android native view uses camera preview, photo, and 30fps re
   );
   const checkRecordPermissionsBody = nativeView.match(/fun checkRecordPermissions\(\): String \{[\s\S]*?\n    fun destroyCamera/)?.[0] || '';
   const scheduleRecordPermissionRetryBody = nativeView.match(/private fun scheduleRecordPermissionRetry\(\) \{[\s\S]*?\n    \}\n\n    private fun hasPermission/)?.[0] || '';
-  const onWindowFocusChangedBody = nativeView.match(/override fun onWindowFocusChanged\(hasWindowFocus: Boolean\) \{[\s\S]*?\n    \}\n\n    private fun openCameraIfReady/)?.[0] || '';
+  const onWindowFocusChangedBody = nativeView.match(/override fun onWindowFocusChanged\(hasWindowFocus: Boolean\) \{[\s\S]*?\n    \}\n\n    private fun resumeCameraPreviewAfterAlbum/)?.[0] || '';
 
   assert.match(nativeView, /class XycNativeCameraView/);
   assert.match(nativeView, /TextureView\.SurfaceTextureListener/);
@@ -2603,6 +2603,7 @@ test('xyc-markvideo Android native view uses camera preview, photo, and 30fps re
   assert.match(nativeView, /private var recordingOutputSize = XycSize\(1280, 720\)/);
   assert.match(nativeView, /@Volatile private var recordingStartPending = false/);
   assert.match(nativeView, /private var videoOutputTarget: VideoOutputTarget\? = null/);
+  assert.match(nativeView, /private var resumeCameraAfterAlbum = false/);
   assert.match(nativeView, /val recordTarget = createVideoOutputTarget\(\)/);
   assert.match(nativeView, /outputFileDescriptor = recordTarget\.fileDescriptor/);
   assert.doesNotMatch(nativeView, /recorder\.start\(\)[\s\S]{0,120}recordTarget\.closeDescriptor\(\)/);
@@ -2643,6 +2644,11 @@ test('xyc-markvideo Android native view uses camera preview, photo, and 30fps re
   assert.notEqual(onWindowFocusChangedBody, '', 'onWindowFocusChanged body should be inspectable');
   assert.match(onWindowFocusChangedBody, /if \(hasWindowFocus && recordPermissionRequested\) \{[\s\S]*val missingPermissions = recordMissingPermissions\(\)[\s\S]*clearRecordPermissionRequestState\(\)/);
   assert.match(onWindowFocusChangedBody, /if \(missingPermissions\.isEmpty\(\)\) \{[\s\S]*openCameraIfReady\(\)[\s\S]*setStatus\("录像权限已准备"\)/);
+  assert.match(onWindowFocusChangedBody, /if \(hasWindowFocus && resumeCameraAfterAlbum\) \{[\s\S]*resumeCameraAfterAlbum = false[\s\S]*resumeCameraPreviewAfterAlbum\(\)[\s\S]*return/);
+  assert.match(nativeView, /fun openSystemAlbum\(mediaUri: String\): String \{[\s\S]*if \(recording \|\| recordingStartPending \|\| recordingStopRequested \|\| photoBusy\) \{[\s\S]*failAndEmit\("1602", "拍摄或保存中不能打开相册", "openSystemAlbum while busy"\)/);
+  assert.match(nativeView, /val shouldResumeCamera = camera != null \|\| previewReady[\s\S]*resumeCameraAfterAlbum = shouldResumeCamera[\s\S]*if \(camera != null\) \{[\s\S]*closeCamera\(\)/);
+  assert.match(nativeView, /resumeCameraAfterAlbum = false[\s\S]*resumeCameraPreviewAfterAlbum\(\)[\s\S]*failAndEmit\("1601", "打开系统相册失败"/);
+  assert.match(nativeView, /private fun resumeCameraPreviewAfterAlbum\(\) \{[\s\S]*if \(recording \|\| recordingStartPending \|\| recordingStopRequested \|\| photoBusy\)[\s\S]*if \(!previewReady \|\| !hasPermission\(Manifest\.permission\.CAMERA\)\)[\s\S]*if \(camera != null\) \{[\s\S]*closeCamera\(\)[\s\S]*openCameraIfReady\(\)/);
   assert.match(nativeView, /photoMissingPermissions\(\)/);
   assert.match(nativeView, /REQUEST_PREPARE_PHOTO_PERMISSIONS/);
   assert.match(nativeView, /photoPermissionMessage\(missingPermissions\)/);

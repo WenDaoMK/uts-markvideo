@@ -104,6 +104,7 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), TextureView.
     private var videoOutputTarget: VideoOutputTarget? = null
     private var lastPublishedMediaUri = ""
     private var lastPublishedMediaKind = ""
+    private var resumeCameraAfterAlbum = false
     private var cameraPermissionRequested = false
     private var cameraPermissionRetryCount = 0
     private var recordPermissionRequested = false
@@ -811,8 +812,16 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), TextureView.
 
     fun openSystemAlbum(mediaUri: String): String {
         return runOnMainSync {
+            if (recording || recordingStartPending || recordingStopRequested || photoBusy) {
+                return@runOnMainSync failAndEmit("1602", "拍摄或保存中不能打开相册", "openSystemAlbum while busy")
+            }
             val mimeType = albumOpenMimeType(mediaUri)
             var lastError: Throwable? = null
+            val shouldResumeCamera = camera != null || previewReady
+            resumeCameraAfterAlbum = shouldResumeCamera
+            if (camera != null) {
+                closeCamera()
+            }
             try {
                 for (intent in albumOpenIntents(mimeType)) {
                     try {
@@ -825,9 +834,13 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), TextureView.
                         lastError = throwable
                     }
                 }
+                resumeCameraAfterAlbum = false
+                resumeCameraPreviewAfterAlbum()
                 failAndEmit("1601", "打开系统相册失败", "No album activity found.")
             } catch (throwable: Throwable) {
                 val cause = lastError ?: throwable
+                resumeCameraAfterAlbum = false
+                resumeCameraPreviewAfterAlbum()
                 failAndEmit("1601", "打开系统相册失败", cause.message ?: cause.javaClass.simpleName)
             }
         }
@@ -856,6 +869,11 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), TextureView.
         if (hasWindowFocus) {
             lockHostActivityToPortrait()
         }
+        if (hasWindowFocus && resumeCameraAfterAlbum) {
+            resumeCameraAfterAlbum = false
+            resumeCameraPreviewAfterAlbum()
+            return
+        }
         if (hasWindowFocus && recordPermissionRequested) {
             val missingPermissions = recordMissingPermissions()
             clearRecordPermissionRequestState()
@@ -875,6 +893,19 @@ class XycNativeCameraView(context: Context) : FrameLayout(context), TextureView.
             cameraPermissionRequested = false
             openCameraIfReady()
         }
+    }
+
+    private fun resumeCameraPreviewAfterAlbum() {
+        if (recording || recordingStartPending || recordingStopRequested || photoBusy) {
+            return
+        }
+        if (!previewReady || !hasPermission(Manifest.permission.CAMERA)) {
+            return
+        }
+        if (camera != null) {
+            closeCamera()
+        }
+        openCameraIfReady()
     }
 
     private fun openCameraIfReady(): String {
